@@ -1,8 +1,5 @@
 %% script for loading melt data from Trusel et al,, 2015
 
-
-
-
 %% 1. Load melt data
 % currently doesnt work because we dont have a tfw file, but I got round
 % this on my main PC, so I need to look at this on that machine. 
