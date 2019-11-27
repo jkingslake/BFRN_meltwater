@@ -5,7 +5,6 @@ load('BFRN/ButtressingFluxResponseNumbers')
 
 B = GRIDobj(x,y,BFRN);
 
-% imagesc(B)
 
 
 

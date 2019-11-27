@@ -1,6 +1,4 @@
-%% Investigate the impact of resolution on  catchment area calculations in two catchments on the Amery Ice Shelf
-% make comparisons in several places
-% start with Amery
+%% Investigate the impact of resolution on catchment area calculations in two catchments on the Amery Ice Shelf
 
 
 %% Load the DEM
@@ -23,13 +21,12 @@ for kk = 1:size(catchment_points,1)   % loop over the catchments
         disp(['starting ' num2str(res(ii)) ' m' ])
         disp('Resampling..')
 
-        %% 1. For different resolutions, resample, do the catchment computation
+        %% 1. Resample at different resolutions
         if res(ii)~=DEMc.cellsize
             DEMr = resample(DEMc,res(ii));
         else
             DEMr = DEMc;
         end
-        
 
         
         %% 2. Do the flow routing computations
@@ -43,12 +40,12 @@ for kk = 1:size(catchment_points,1)   % loop over the catchments
         [DB, x_outlet, y_outlet] = drainagebasins(FD,S);
         
         
-        %% 3. Crop only the catchment we want and record is in a cell array (Mask) as a logical GridOBJ         
-        disp('isolating one catchment..')
+        %% 3. Crop only the catchment we want and record in a cell array (Mask) as a logical GridOBJ         
+        disp('isolate one catchment..')
         [x_b,y_b] = getcoordinates(DB);
         
         % find the correct catchment 
-        CatchmentNumber =  interp2(x_b,y_b,DB.Z,catchment_points(kk,1),catchment_points(kk,2),'nearest');  % (B.Z is an array of the catchment numbers) and these are the coordinates of the outlet of Big Lake's catchment
+        CatchmentNumber =  interp2(x_b,y_b,DB.Z,catchment_points(kk,1),catchment_points(kk,2),'nearest');  % (DB.Z is an array of the catchment numbers) and these are the coordinates of the outlet of Big Lake's catchment
         
         Mask{ii,kk} = DB == CatchmentNumber;   % mask is a logical array showing which cells are in our catchment.
    
@@ -132,8 +129,7 @@ xlabel  'cellsize [m]'
 ylabel 'catchment size [m^2]'
 
 figure(1)
-print('Total_Area_cellsize.png','-dpng')
-
+% print('Total_Area_cellsize.png','-dpng')
 
 figure(2)
 % print('Amery_Catchments.png','-dpng')
