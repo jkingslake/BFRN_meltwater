@@ -1,7 +1,9 @@
 # BFRN_meltwater
 Project to compute the direct impact of meltwater flow across ice shelf surfaces on buttressing. See WAIS abstract
 
-requires Topotoolbox
+The master branch does the flow routing in Matlab. This branch is aimed at converting this to python using richdem and pangeo. 
+
+Old version (currently the master branch) requires Topotoolbox
 
 Uses a merged REMA dem <https://www.pgc.umn.edu/data/rema/> over Amery Ice Shelf
 
