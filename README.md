@@ -1,15 +1,14 @@
-# BFRN_meltwater
-Project to compute the direct impact of meltwater flow across ice shelf surfaces on buttressing. See WAIS abstract
+# Grounding-line flux changes due to flow of surface meltwater across Antarctic ice shelves 
 
-requires Topotoolbox
+## Introduction 
+Meltwater produced on the surface of the Antarctic Ice Sheet flows can flow across the surface of the ice for 10's or 100's of kilometers, but rarely reaches the ocean. Instead, most of it refreezes after draingin some distance. This redistributes mass. Ice shelves provide buttressing to inland ice. Different areas of ice sheets provide different amounts of buttressing. Therefore, if the buttressing provided by the ice shelf in the location is different than the buttressing provided by the ice shelf in the location where the meltwater refreezes, the net result of melting, drianage and refreezing will be a change in ice flux across the grounding line.
 
-Uses a merged REMA dem <https://www.pgc.umn.edu/data/rema/> over Amery Ice Shelf
+This project aims to quantify the impact of meltwater flow on ice flux across the grounding line.
 
-FillandMergeBasins_v2.m is the main function for simply computing flow across the REMA DEM by filling the depressions and joining up basins. THis function calls AddWaterDepthsTohs.m and Hypsometry_of_all_basins.m and uses the subset of REMA contained inteh GRIDObj stored in ClippedDEMforPartialFillingAnalysis.mat. It could use any DEM though. 
+For more details see Poster_abstract_Kingslake_final.docx, which is a poster abstract for the WAIS conference in 2020.
 
-Simply running FillandMergeBasins_v2.m should result in the DE being progressivly filled until all depressions are filled and the process will stop. 
+The matlab directory contains code written in 2019/2020 in matlab to compute the flow of meltwater across digital elevation models with depressions. This was used extensivley by Julian Spergel in his PhD thesis (https://academiccommons.columbia.edu/doi/10.7916/swez-dp81; https://doi.org/10.7916/swez-dp81) to examine the propensity of different ice shelf areas to transport water. 
 
-FillandMergeBasins_v2.m does not resolve wate flow explicitly, it just assumes instantaneous arival at the lowest point in each basin. 
-Advantages:  this appraoch is very fast compared to modelling the flow. This code can be used for looking at nonlinearities associated with filling if depressions. 
-Limitations: this approach is not going to be that useful for including incision and percolation because it doesnt reslove the flow. 
+The python directory contains code using a third-party library called fill-spill-merge to do a similar computation that the matlab code was designed to perform. fill-spill-merge is written in C++ and is well tested. Future work, at least for now, will be based around fill-spill-merge, as it is probably more reliable and faster than the matlab code. The directoty contains a number of jupyter notebooks that use python to call fill-spill-merge and analyze and plot the results. 
 
+Barnes, R., Callaghan, K.L. and Wickert, A.D., 2020. Computing water flow through complex landscapes, Part 3: Fill-Spill-Merge: Flow routing in depression hierarchies. Earth Surface Dynamics Discussions, 2020, pp.1-22.
