@@ -7,6 +7,13 @@ This project aims to quantify the impact of meltwater flow on ice flux across th
 
 For more details see Poster_abstract_Kingslake_final.docx, which is a poster abstract for the WAIS conference in 2020.
 
+## Data 
+- The Reference Elevation Model of Antarctica (REMA) is a high-resolution digital elevation model of Antarctica. It is supplied as a tiled mosaic at 8 m resolution. It was derived from stereo satellite imagery.
+
+- Buttressing flux response numbers (BFRN) from Reese et al. 2018. This is a two-dimensional field of values showing the change in annual mass flux across the grounding line for a given change in ice-shelf mass in a given location. There were computed using a continental- wide model of the Antarctic Ice Sheet, wihch was systematically perturbed by thinning the ice shelves in 20-by-20 km grid cells. For each perturbation the instantaneous change in the mass flux across the grounding line was computed. The BFRN is the ratio of the change in mass flux to the change in ice-shelf mass.
+
+Reese, R., Gudmundsson, G.H., Levermann, A. and Winkelmann, R., 2018. The far reach of ice-shelf thinning in Antarctica. Nature Climate Change, 8(1), pp.53-57.
+
 ## Approach
 - setup an algorithm that can take as input a DEM and a map of meltwater production and compute the final distribution of meltwater after it has flowed across the surface, potentially filling and overtopping depressions. 
 - systematically apply this algorithm across all Antarctic ice shelves and adjacent regions, applying meltwater to grid cells and recording the distribution of meltwater, 
@@ -15,7 +22,6 @@ For more details see Poster_abstract_Kingslake_final.docx, which is a poster abs
 
 Assuming the buttressing response is linear (as Reese et al did), it doesn't matter if the mass change in any one spot is negative or positive, and it doesn't matter if there is variability spatially, the net change in ice flux across the grounding line is the sum of the changes associated with each the mass change in each individual grid cell.
 
-Reese, R., Gudmundsson, G.H., Levermann, A. and Winkelmann, R., 2018. The far reach of ice-shelf thinning in Antarctica. Nature Climate Change, 8(1), pp.53-57.
 
 ## Code
 
