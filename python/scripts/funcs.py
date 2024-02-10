@@ -1,12 +1,14 @@
 from matplotlib import pyplot as plt
-from urllib.request import urlretrieve
 import numpy as np
 import xarray as xr
 import os
-import rasterio
 import rioxarray
-import panel.widgets as pnw
 from typing import Optional, Tuple
+import subprocess
+import hvplot.xarray # noqa 
+hvplot.extension('bokeh')
+
+
 
 ## Define a function for running fill-spill-merge
 
@@ -38,20 +40,17 @@ def fsm(dem_filename: str,
     - The fill-spill-merge code also write the resulting water depth to a file ending with "-wtd.tif".
     """
 
-    print("running fill-spill-merge...")
-    
-
     if uniform_melt is not None:
-        os.system(f"{path_to_fsm} {dem_filename} {prefix} {sea_level} --swl={uniform_melt}")
+        subprocess.run([path_to_fsm, dem_filename, prefix, str(sea_level), "--swl=" + str(uniform_melt)], stdout=subprocess.DEVNULL)
+        #os.system(f"{path_to_fsm} {dem_filename} {prefix} {sea_level} --swl={uniform_melt}")
 
     if melt_filename is not None:
-        os.system(f"{path_to_fsm} {dem_filename} {prefix} {sea_level} --swf={melt_filename}")
+        subprocess.run([path_to_fsm, dem_filename, prefix, str(sea_level), "--swf=" + melt_filename], stdout=subprocess.DEVNULL)
+        #os.system(f"{path_to_fsm} {dem_filename} {prefix} {sea_level} --swf={melt_filename}")
 
     if uniform_melt is None and melt_filename is None:
         raise ValueError("Must specify either uniform_melt or melt_filename") 
 
-
-    print("loading results...")
     #surface_height = rioxarray.open_rasterio(prefix + "surface-height.tif").squeeze()
     water_depth = rioxarray.open_rasterio(prefix + "-wtd.tif").squeeze()
     #labels = rioxarray.open_rasterio(prefix + "label.tif").squeeze()
@@ -109,7 +108,8 @@ def loop_over_melt_magnitudes(dem_filename = "rema_subsets/dem_small_2.tif",
                             ymax: float = 1.935e6,
                             iterations = 1,
                             start_melt_magnitude = 1,
-                            end_melt_magnitude = 30,):
+                            end_melt_magnitude = 30,
+                            plot_with_hvplot=False):
     # Load the DEM
     dem = rioxarray.open_rasterio(dem_filename, chunks={})
     dem = dem.squeeze()
@@ -157,16 +157,16 @@ def loop_over_melt_magnitudes(dem_filename = "rema_subsets/dem_small_2.tif",
     results = xr.merge([water_depth, dem, melt])
     results = results.drop_vars('band')   # drop this unneeded variable
 
-    # add information about the coordinates and variabels in attributes
+    # add information about the coordinates and variables in attributes
     results.melt_mag.attrs = {'units': 'meters', 'long_name': 'melt magnitude', 'description': 'the magnitude of the melt in the rectangular region'}
     results.melt.attrs = {'units': 'meters', 'long_name': 'surface melt', 'description': 'the surface melt as a function of x and y'}
 
-    # put bounds list into an xarray
+    # put bounds list into the results xr.Dataset
     bounds_list = np.array(bounds_list)
     results['bounds'] = xr.DataArray(bounds_list, dims=['melt_mag', 'bounds_index'], name='bounds')
     results.bounds.attrs = {'long_name': 'bounds of the rectangular melt region', 'description': 'the bounds of the rectangular melt region: (xmin, ymin, xmax, ymax)'}
 
-    # put x_melt_center list into an xarray
+    # put x_melt_center, y_melt_center, and melt_width into the results xr.Dataset
     x_center_of_melts = np.array(x_center_of_melts)
     results['x_center_of_melt'] = xr.DataArray(x_center_of_melts, dims='melt_mag', name='x_melt_center')
     results.x_center_of_melt.attrs = {'long_name': 'x coordinate of the center of the melt region', 'description': 'the x coordinate of the center of the melt region'}
@@ -183,10 +183,14 @@ def loop_over_melt_magnitudes(dem_filename = "rema_subsets/dem_small_2.tif",
     results['y_center_of_mass'] = results.y.weighted(weights).mean(dim = ['x', 'y'])
     results.x_center_of_mass.attrs = {'long_name': 'x coordinate of the center of mass', 'description': 'the x coordinate of the center of mass of the water, i.e. the depth-weighted centroid'}
     results.y_center_of_mass.attrs = {'long_name': 'y coordinate of the center of mass', 'description': 'the y coordinate of the center of mass of the water, i.e. the depth-weighted centroid'}
-    x_center_of_melt = (results['bounds'][:,2]+results['bounds'][:,0])/2
-    y_center_of_melt = (results['bounds'][:,3]+results['bounds'][:,1])/2
+    #x_center_of_melt = (results['bounds'][:,2]+results['bounds'][:,0])/2
+    #y_center_of_melt = (results['bounds'][:,3]+results['bounds'][:,1])/2
     results['L'] = ((results['x_center_of_mass'] - results['x_center_of_melt'])**2 + (results['y_center_of_mass'] - results['y_center_of_melt'])**2)**(1/2)
     results.L.attrs = {'long_name': 'distance between the center of mass and the center of the melt region', 'description': 'the distance between the center of mass and the center of the melt region'}
+    
+    if plot_with_hvplot:
+        results.attrs['hvplot_function'] = map_water_depth(results)
+    
     return results
 
 
