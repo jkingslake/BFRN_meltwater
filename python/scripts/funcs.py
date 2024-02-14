@@ -3,9 +3,11 @@ import numpy as np
 import xarray as xr
 import os
 import rioxarray
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Callable
 import subprocess
 import hvplot.xarray # noqa 
+from tqdm.autonotebook import tqdm
+import pandas as pd
 hvplot.extension('bokeh')
 
 
@@ -94,9 +96,6 @@ def square_melt_region(dem: xr.DataArray,
     melt, melt_filename, melt_bounds = rectangular_melt_region(dem, melt_magnitude, xmin, xmax, ymin, ymax, melt_filename)
     
     return melt, melt_filename, melt_bounds
-
-
-## Run FSM with different melt magnitudes
     
 def loop_over_melt_magnitudes(dem_filename = "rema_subsets/dem_small_2.tif",
                             x_center_of_melt: float = 817500,
@@ -110,6 +109,8 @@ def loop_over_melt_magnitudes(dem_filename = "rema_subsets/dem_small_2.tif",
                             start_melt_magnitude = 1,
                             end_melt_magnitude = 30,
                             plot_with_hvplot=False):
+    """This function is an old approach to looping. Use gridSearch and fsm_xarray instead."""
+    
     # Load the DEM
     dem = rioxarray.open_rasterio(dem_filename, chunks={})
     dem = dem.squeeze()
@@ -193,11 +194,148 @@ def loop_over_melt_magnitudes(dem_filename = "rema_subsets/dem_small_2.tif",
     
     return results
 
-
-def map_water_depth(results, coarsen_x=10, coarsen_y=10):
+def map_water_depth(results, coarsen_x=10, coarsen_y=10, width=500, height=500):
     coarse = results.coarsen(x=coarsen_x, y=coarsen_y, boundary='trim').mean()
-    plot = coarse.water_depth.hvplot(x ='y', y = 'x', cmap='Blues', clim=(0,1), width = 1200, height = 300, aspect='equal')\
+    plot = coarse.water_depth.hvplot(x ='y', y = 'x', cmap='Blues', clim=(0,1), width = width, height = height, aspect='equal')\
         * coarse.dem.hvplot.contour(x ='y', y = 'x',levels = 40, cmap='hot')\
         * coarse.melt.hvplot.contour(x ='y', y = 'x', levels=[0.0, 0.0])\
         * coarse.hvplot.scatter(x = 'y_center_of_mass', y = 'x_center_of_mass', color = 'green', size = 400, marker = '*')
     return plot
+
+def gridSearch(function: Callable, **kwargs) -> xr.core.dataset.Dataset:
+    """
+    Perform a grid search by iterating over all combinations of input parameters and running a given function.
+
+    Parameters:
+    function (callable): The function to be executed for each combination of input parameters. This function should return either an xarray dataset, an xarray datarray, or a numpy array.
+    **kwargs: Keyword arguments representing the input parameters and their corresponding values.
+
+    Returns:
+    xr_unstacked (xarray.core.dataset.Dataset): The concatenated and unstacked xarray dataset containing the results of the grid search.
+
+    Example:
+    #### Define a function to be executed for each combination of input parameters
+    def my_function(param1, param2):
+        ##### Perform some computation using the input parameters
+        result = param1 + param2
+        return result
+
+    #### Perform a grid search by iterating over all combinations of input parameters
+    results = gridSearch(my_function, param1=[1, 2, 3], param2=[4, 5])
+    
+    """
+
+    # extract the names of the parameters
+    p_names = [x for x in kwargs] 
+
+    # extract the values of the parameters
+    p_values_list = [x for x in kwargs.values()]
+    
+    # create a multiIndex from the parameter names and values
+    multiIndex = pd.MultiIndex.from_product(p_values_list, names=p_names)
+
+
+    #loop over every conbimation of parameters stored in multiIndex
+    xr_out_list = []
+    for mi in tqdm(multiIndex):
+
+        # create a dictionary of inputs for the function from the values stored in multiIndex
+        inputs = {p_names[x]: mi[x] for x in range(len(p_names))}
+
+        # run the function with this combination of inputs
+        single_iteration_result = function(**inputs)
+
+        # add coordinates to the result and store as as either a DataSet or a dataArray
+        if isinstance(single_iteration_result, xr.core.dataset.Dataset):
+            xr_out_new = single_iteration_result.assign_coords(inputs)
+        else:
+            xr_out_new = xr.DataArray(single_iteration_result, coords=inputs)    # use this line if the function returns a data array, or a numpy array
+        
+        # append the result to a list
+        xr_out_list.append(xr_out_new)
+
+    # concatenate the list of results into a single xarray
+    xr_stacked = xr.concat(xr_out_list, dim='stacked_dim')
+
+    # add the multiIndex to the xarray
+    mindex_coords = xr.Coordinates.from_pandas_multiindex(multiIndex, 'stacked_dim')
+    xr_stacked = xr_stacked.assign_coords(mindex_coords)
+
+    # unstack the xarray - i.e. separate the multiIndex into separate dimensions
+    xr_unstacked = xr_stacked.unstack()
+
+    # convert to a dataset if the result is a data array
+    if isinstance(xr_unstacked, xr.DataArray):
+        xr_unstacked.name = 'result'
+        xr_unstacked = xr_unstacked.to_dataset()
+
+
+    return xr_unstacked
+
+
+def add_center_of_mass(results, 
+                       x_center_of_melt, 
+                       y_center_of_melt):
+    # add the center of mass of the water (see centroid_test.ipynb for notes on this method)
+    weights = results.water_depth.fillna(0)
+    results['x_center_of_mass'] = results.x.weighted(weights).mean(dim = ['x', 'y'])
+    results['y_center_of_mass'] = results.y.weighted(weights).mean(dim = ['x', 'y'])
+    results.x_center_of_mass.attrs = {'long_name': 'x coordinate of the center of mass', 'description': 'the x coordinate of the center of mass of the water, i.e. the depth-weighted centroid'}
+    results.y_center_of_mass.attrs = {'long_name': 'y coordinate of the center of mass', 'description': 'the y coordinate of the center of mass of the water, i.e. the depth-weighted centroid'}
+    results['L'] = ((results['x_center_of_mass'] - x_center_of_melt)**2 + (results['y_center_of_mass'] - y_center_of_melt)**2)**(1/2)
+    results.L.attrs = {'long_name': 'distance between the center of mass and the center of the melt region', 'description': 'the distance between the center of mass and the center of the melt region'}
+    return results
+
+def fsm_xarray(dem_filename="rema_subsets/dem_small_2.tif",
+               melt_magnitude=0.1,
+               x_center_of_melt: float = 817500.0,
+               y_center_of_melt: float = 1.9325e6,
+               melt_width: float = 5000) -> xr.Dataset:
+    """
+    Perform meltwater routing using fill-spill-merge and output an xarray dataset.
+
+    Parameters:
+    - dem_filename (str): Path to the digital elevation model (DEM) file.
+    - melt_magnitude (float): Magnitude of the meltwater.
+    - x_center_of_melt (float): X-coordinate of the center of the melt region.
+    - y_center_of_melt (float): Y-coordinate of the center of the melt region.
+    - melt_width (float): Width of the melt region.
+
+    Returns:
+    - results (xr.Dataset): Dataset containing the water depth, DEM, and melt data.
+
+    """
+
+    # Load the DEM
+    dem = rioxarray.open_rasterio(dem_filename, chunks={})
+    dem = dem.squeeze()
+
+ 
+    melt, melt_filename, bounds = square_melt_region(dem, 
+                                                        melt_magnitude, 
+                                                        x_center_of_melt=x_center_of_melt, 
+                                                        y_center_of_melt=y_center_of_melt, 
+                                                        width=melt_width)  
+    water_depth = fsm(dem_filename, melt_filename=melt_filename)        
+    
+    # name the xr.DataArrays
+    water_depth.name = 'water_depth'
+    dem.name = 'dem'
+    melt.name = 'melt'
+
+    # add information about the coordinates and variables in attributes
+    melt.attrs = {'units': 'meters', 'long_name': 'surface melt', 'description': 'the surface melt as a function of x and y'}
+
+    # merge the xr.DataArrays into a xr.Dataset
+    results = xr.merge([water_depth, dem, melt])
+    results = results.drop_vars('band')   # drop this unneeded variable
+
+    bounds = np.array(bounds)
+    results['bounds'] = xr.DataArray(bounds, dims=['bounds_index'], name='bounds')
+    results.bounds.attrs = {'long_name': 'bounds of the rectangular melt region', 'description': 'the bounds of the rectangular melt region: (xmin, ymin, xmax, ymax)'}
+
+    results = add_center_of_mass(results, 
+                       x_center_of_melt, 
+                       y_center_of_melt)
+    
+    return results
