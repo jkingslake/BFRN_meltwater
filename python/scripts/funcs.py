@@ -9,7 +9,7 @@ import hvplot.xarray # noqa
 from tqdm.autonotebook import tqdm
 import pandas as pd
 hvplot.extension('bokeh')
-
+import sparse
 
 
 ## Define a function for running fill-spill-merge
@@ -231,6 +231,11 @@ def gridSearch(function: Callable, **kwargs) -> xr.core.dataset.Dataset:
     # extract the values of the parameters
     p_values_list = [x for x in kwargs.values()]
     
+    # p_values_list should be a list of lists, if any items are not a list, then this 
+    # is because the user has only specified a single value for that parameter. 
+    # Loop through the list and convert any items that are not a list into a list containing the one item.
+    p_values_list = [[x] if not isinstance(x,list) else x for x in p_values_list]
+
     # create a multiIndex from the parameter names and values
     multiIndex = pd.MultiIndex.from_product(p_values_list, names=p_names)
 
@@ -290,7 +295,8 @@ def fsm_xarray(dem_filename="rema_subsets/dem_small_2.tif",
                melt_magnitude=0.1,
                x_center_of_melt: float = 817500.0,
                y_center_of_melt: float = 1.9325e6,
-               melt_width: float = 5000) -> xr.Dataset:
+               melt_width: float = 5000,
+               sparse: bool = True) -> xr.Dataset:
     """
     Perform meltwater routing using fill-spill-merge and output an xarray dataset.
 
@@ -300,6 +306,7 @@ def fsm_xarray(dem_filename="rema_subsets/dem_small_2.tif",
     - x_center_of_melt (float): X-coordinate of the center of the melt region.
     - y_center_of_melt (float): Y-coordinate of the center of the melt region.
     - melt_width (float): Width of the melt region.
+    - sparse (bool): Whether to use sparse arrays for the mlet and water_depth outputs (default: True).
 
     Returns:
     - results (xr.Dataset): Dataset containing the water depth, DEM, and melt data.
@@ -338,4 +345,26 @@ def fsm_xarray(dem_filename="rema_subsets/dem_small_2.tif",
                        x_center_of_melt, 
                        y_center_of_melt)
     
+    if sparse:
+        results = replace_dense_with_sparse(results, 'water_depth')
+        results = replace_dense_with_sparse(results, 'melt')
+    
+    return results
+
+def replace_dense_with_sparse(results: xr.Dataset, variable: str) -> xr.Dataset:
+    """
+    Replaces a dense variable in the results xr.DataSet with a sparse variable.
+
+    Parameters:
+        results (dict): The dictionary containing the results.
+        variable (str): The name of the variable to be replaced.
+
+    Returns:
+        dict: The updated results dictionary with the variable replaced by a sparse variable.
+
+    Notes:
+        see BFRN_meltwater/python/notebooks/sparse.ipynb for notes on this. 
+    """
+    sparse_variable = sparse.COO.from_numpy(results[variable].values) 
+    results[variable].values = sparse_variable
     return results
