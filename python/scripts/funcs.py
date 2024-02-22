@@ -291,6 +291,43 @@ def add_center_of_mass(results,
     results.L.attrs = {'long_name': 'distance between the center of mass and the center of the melt region', 'description': 'the distance between the center of mass and the center of the melt region'}
     return results
 
+def GL_flux(results):
+
+    bfrn = xr.open_dataset('/Users/jkingslake/Documents/science/meltwater_routing/BFRN_meltwater/data/BFRN/bfrn.nc')   #  BFRN_meltwater/data/BFRN/load_BFRN.ipynb generates this file
+    bfrn = bfrn['__xarray_dataarray_variable__']
+    bfrn.name = 'bfrn'
+    
+    bfrn_high_res = bfrn.interp_like(results, method='nearest')
+
+    redistribution_depth = -results['melt'] + results['water_depth']
+    redistribution_depth.attrs['units'] = 'm'
+    redistribution_depth.attrs['long_name'] = 'Redistribution depth'
+
+    x_resolution = results.x[1].values - results.x[0].values
+    assert x_resolution == np.abs(results.y[1].values - results.y[0].values)
+    resolution = x_resolution
+    cell_area = resolution**2
+
+    redistribution_volume_per_cell = redistribution_depth * cell_area
+    redistribution_volume_per_cell.name = 'redistribution_volume_per_cell'
+    redistribution_volume_per_cell.attrs['units'] = 'm3'
+    redistribution_mass_per_cell = redistribution_volume_per_cell * 1000
+    redistribution_mass_per_cell.name = 'redistribution_mass_per_cell'
+    redistribution_mass_per_cell.attrs['units'] = 'kg'
+
+    GL_flux_response_per_cell = -redistribution_mass_per_cell * bfrn_high_res
+    GL_flux_response_per_cell.name = 'GL_flux_response_per_cell'
+    GL_flux_response_per_cell.attrs['description'] = 'The change in grounding line flux due to the change in ice shelf thickness in each cell fue to water redistribution'
+    GL_flux_response_per_cell.attrs['units'] = 'kg/yr'
+
+
+    total_GL_flux_response = GL_flux_response_per_cell.sum(dim=['x','y'])
+    total_GL_flux_response.name = 'total_GL_flux_response'
+    total_GL_flux_response.attrs['units'] = 'kg/yr'
+    total_GL_flux_response.attrs['description'] = 'The total instantaneous change in grounding line flux due to the change in ice shelf thickness in each cell due to water redistribution'
+
+    return xr.merge([results, total_GL_flux_response])
+
 def fsm_xarray(dem_filename="rema_subsets/dem_small_2.tif",
                melt_magnitude=0.1,
                x_center_of_melt: float = 817500.0,
@@ -345,6 +382,8 @@ def fsm_xarray(dem_filename="rema_subsets/dem_small_2.tif",
                        x_center_of_melt, 
                        y_center_of_melt)
     
+    results = GL_flux(results)
+    
     if sparse:
         results = replace_dense_with_sparse(results, 'water_depth')
         results = replace_dense_with_sparse(results, 'melt')
@@ -368,3 +407,127 @@ def replace_dense_with_sparse(results: xr.Dataset, variable: str) -> xr.Dataset:
     sparse_variable = sparse.COO.from_numpy(results[variable].values) 
     results[variable].values = sparse_variable
     return results
+
+
+def load_REMA_subset(ROIgeojson_filename= '../../../ROIs/boudouin_west_1.geojson',
+                     decimate=None,
+                     coarsen=None,
+                     rechunk=False,
+                     save_tiff=False,
+                     tiff_filename='/Users/jkingslake/Documents/science/meltwater_routing/big_data/REMA_subset.tif',
+                     save_zarr=False,
+                     zarr_filename='/Users/jkingslake/Documents/science/meltwater_routing/big_data/REMA_subset.zarr',
+                     load=False,
+                     previously_loaded_da=None):
+    """
+    Loads a subset of REMA (Reference Elevation Model of Antarctica) data based on a given region of interest (ROI).
+
+    Parameters:
+    - ROIgeojson_filename (str): Path to the ROI geojson file.
+    - decimate (int): Decimation factor for subsampling the data. Default is None.
+    - coarsen (int): Coarsening factor for aggregating the data. Default is None.
+    - rechunk (bool): Flag indicating whether to rechunk the data. Default is False.
+    - save_tiff (bool): Flag indicating whether to save the data as a TIFF file. Default is False.
+    - tiff_filename (str): Path to save the TIFF file. Default is '/Users/jkingslake/Documents/science/meltwater_routing/big_data/REMA_subset.tif'.
+    - save_zarr (bool): Flag indicating whether to save the data as a Zarr file. Default is False.
+    - zarr_filename (str): Path to save the Zarr file. Default is '/Users/jkingslake/Documents/science/meltwater_routing/big_data/REMA_subset.zarr'.
+    - load (bool): Flag indicating whether to load the data into memory. Default is False.
+    - previously_loaded_da (xarray.DataArray): Previously loaded data array. Default is None.
+
+    Returns:
+    - da (xarray.DataArray): Subset of REMA data based on the ROI.
+    - da_loaded (xarray.DataArray): Loaded data array if 'load' is True, otherwise None.
+    """
+    
+    if previously_loaded_da is None:
+        # get the crs by reading one file
+        da_for_crs = rioxarray.open_rasterio("https://storage.googleapis.com/pangeo-pgc/8m/50_39/50_39_8m_dem_COG_LZW.tif", chunks={})
+
+        # Load a geojson file created on geojson.io
+        ROI = gpd.read_file(ROIgeojson_filename)
+        ROI.to_crs(da_for_crs.spatial_ref.attrs['crs_wkt'],inplace=True)
+
+        #read in the REMA tile index
+        REMA_index = gpd.read_file('../../../../REMAWaterRouting/REMA_Tile_Index/REMA_Tile_Index_Rel1_1.shp')
+
+        #get the bounds of the ROI
+        [minx,miny,maxx,maxy]= ROI.bounds.values.tolist()[0]
+
+        #create a shapely polygon from the bounds
+        bbox = shapely.geometry.Polygon([[minx,miny],[maxx,miny],[maxx,maxy],[minx,maxy],[minx,miny]])
+
+        #find the REMA tiles that intersect the ROI
+        IS_intersection = np.argwhere(REMA_index.overlaps(bbox).tolist())
+
+        #subset the list of REMA tiles to only include those that intersect the ROI
+        IS_tiles = REMA_index.tile[IS_intersection.flatten()]
+
+        #extract the row and column numbers of the REMA tiles from the subsetted list of tiles, IS_tiles
+        row = [str.split(x,'_')[0] for x in IS_tiles.to_list()]
+        col = [str.split(x,'_')[1] for x in IS_tiles.to_list()]
+        row = np.int_(row)
+        col = np.int_(col)
+
+        ### Load the REMA tiles lazily
+        uri_fmt = 'https://storage.googleapis.com/pangeo-pgc/8m/{i_idx:02d}_{j_idx:02d}/{i_idx:02d}_{j_idx:02d}_8m_dem_COG_LZW.tif'
+
+        chunksize = 8 * 512
+        rows = []
+        for i in tqdm(np.arange(row.max(), row.min()-1, -1)): 
+            cols = []
+            for j in np.arange(col.min(),col.max()+1):
+                uri = uri_fmt.format(i_idx=i, j_idx=j)
+                try:
+                    #print(uri)
+                    dset = rioxarray.open_rasterio(uri, chunks=chunksize)
+                    dset_masked = dset.where(dset > 0.0)
+                    cols.append(dset_masked)
+                    #print(uri)
+                except RasterioIOError:
+                    #print(f'failed to load tile {i},{j}')
+                    pass
+            rows.append(cols)
+
+        dsets_rows = [xr.concat(row, 'x') for row in rows]
+        da = xr.concat(dsets_rows, 'y', )
+        da = da.squeeze()
+        da = da.sel(x=slice(minx,maxx),y=slice(maxy,miny))
+
+    else:
+        da = previously_loaded_da
+
+    da_loaded = None
+    if load:
+        da.load()
+        da_loaded = da.copy()
+
+    if decimate:
+        da = da.isel(x=slice(0,da.x.shape[0],decimate),y=slice(0,da.y.shape[0],decimate))
+        print(f"Resolution after decimation is {(da.x[1]-da.x[0]).values} m")
+        da.load()
+
+
+    if coarsen:
+        da = da.coarsen(x=coarsen, y=coarsen, boundary='trim').mean()
+        print(f"Resolution after coarsening is {(da.x[1]-da.x[0]).values} m")
+        da.load()        
+
+    if rechunk:
+        da = da.chunk({'x':chunksize,'y':chunksize})
+
+    #add ocean cells around the edge of the DEM
+    da[0:1,:] = 0.0 
+    da[-1:,:] = 0.0
+    da[:,0:1] = 0.0
+    da[:,-1:] = 0.0
+
+    #fill NaNs with zeros
+    da = da.fillna(0.0)
+
+    if save_tiff:
+        da.rio.to_raster(tiff_filename)
+    
+    if save_zarr:
+        da.to_zarr(zarr_filename)
+
+    return da, da_loaded
