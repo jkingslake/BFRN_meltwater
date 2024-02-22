@@ -27,6 +27,6 @@ Assuming the buttressing response is linear (as Reese et al did), it doesn't mat
 
 The /matlab directory contains code written in 2019/2020 in matlab to compute the flow of meltwater across digital elevation models with depressions. This was used extensively by Julian Spergel in his PhD thesis (https://academiccommons.columbia.edu/doi/10.7916/swez-dp81; https://doi.org/10.7916/swez-dp81) to examine the propensity of different ice shelf areas to transport water. 
 
-The /python directory contains code using a third-party library called fill-spill-merge to do a similar computation that the matlab code was designed to perform. fill-spill-merge is written in C++ and is well tested. Future work, at least for now, will be based around fill-spill-merge, as it is probably more reliable and faster than the Matlab code. The directory contains a number of Jupyter notebooks that use python to call fill-spill-merge and analyze and plot the results. 
+The /python directory contains code using a third-party library called fill-spill-merge to do a similar computation that the matlab code was designed to perform. fill-spill-merge is written in C++ and is well tested. The directory contains a number of Jupyter notebooks that use python to call fill-spill-merge and analyze and plot the results. 
 
 Barnes, R., Callaghan, K.L. and Wickert, A.D., 2020. Computing water flow through complex landscapes, Part 3: Fill-Spill-Merge: Flow routing in depression hierarchies. Earth Surface Dynamics Discussions, 2020, pp.1-22.
