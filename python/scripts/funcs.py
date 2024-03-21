@@ -15,11 +15,11 @@ import sparse
 ## Define a function for running fill-spill-merge
 
 def fsm(dem_filename: str, 
-        prefix: str = "fsm_results/rema_tests/test-3", 
+        prefix: str = "/Users/jkingslake/Documents/science/meltwater_routing/BFRN_meltwater/python/notebooks/fsm_results/rema_tests/test-3", 
         uniform_melt: Optional[float] = None, 
         melt_filename: Optional[str] = None, 
         sea_level: float = 0.0,
-        path_to_fsm: str = "../../../Barnes2020-FillSpillMerge/build/fsm.exe") -> xr.DataArray:
+        path_to_fsm: str = "/Users/jkingslake/Documents/science/meltwater_routing/Barnes2020-FillSpillMerge/build/fsm.exe") -> xr.DataArray:
     """
     Runs the fill-spill-merge (FSM) algorithm on a digital elevation model (DEM) to calculate water depth.
 
@@ -66,7 +66,7 @@ def rectangular_melt_region(dem: xr.DataArray,
                             xmax: float = 820000, 
                             ymin: float = 1.93e6, 
                             ymax: float = 1.935e6,
-                            melt_filename = "rema_subsets/water_input_file_3.tif")\
+                            melt_filename = "/Users/jkingslake/Documents/science/meltwater_routing/BFRN_meltwater/python/notebooks/rema_subsets/water_input_file_3.tif")\
       -> Tuple[xr.DataArray, str, Tuple[float, float, float, float]]:
     
     # starting with the DEM, make a melt file with a rectangular region of non-zero melt
@@ -86,7 +86,7 @@ def square_melt_region(dem: xr.DataArray,
                        x_center_of_melt: float = 817500, 
                        y_center_of_melt: float = 1.9325e6, 
                        width: float = 5000,
-                       melt_filename = "rema_subsets/water_input_file_3.tif")\
+                       melt_filename = "/Users/jkingslake/Documents/science/meltwater_routing/BFRN_meltwater/python/notebooks/rema_subsets/water_input_file_3.tif")\
       -> Tuple[xr.DataArray, str, Tuple[float, float, float, float]]:
     
     xmin = x_center_of_melt - width/2
@@ -281,7 +281,7 @@ def gridSearch(function: Callable, **kwargs) -> xr.core.dataset.Dataset:
 def add_center_of_mass(results, 
                        x_center_of_melt, 
                        y_center_of_melt):
-    # add the center of mass of the water (see centroid_test.ipynb for notes on this method)
+    """Add the center of mass of the water (see centroid_test.ipynb for notes on this method) """
     weights = results.water_depth.fillna(0)
     results['x_center_of_mass'] = results.x.weighted(weights).mean(dim = ['x', 'y'])
     results['y_center_of_mass'] = results.y.weighted(weights).mean(dim = ['x', 'y'])
@@ -292,7 +292,19 @@ def add_center_of_mass(results,
     return results
 
 def GL_flux(results):
+    """
+    Calculate the change in the grounding line flux due to the change in ice shelf thickness due to water redistribution.
+    
+    Parameters:
+    - results (xr.Dataset): The output of fsm_xarray or gridSearch(function=fsm_xarray, ...)
 
+    Returns:
+    - results (xr.Dataset): The input xr.Dataset with the addition of the grounding line flux response.
+
+    Notes:
+    It calculates the change in grounding line flux multiplying the change in ice shelf thickness due to water redistribution by the butttssing flux response number (Reese et al. 2018, Nature Climate Change)
+
+    """
     bfrn = xr.open_dataset('/Users/jkingslake/Documents/science/meltwater_routing/BFRN_meltwater/data/BFRN/bfrn.nc')   #  BFRN_meltwater/data/BFRN/load_BFRN.ipynb generates this file
     bfrn = bfrn['__xarray_dataarray_variable__']
     bfrn.name = 'bfrn'
@@ -328,7 +340,7 @@ def GL_flux(results):
 
     return xr.merge([results, total_GL_flux_response])
 
-def fsm_xarray(dem_filename="rema_subsets/dem_small_2.tif",
+def fsm_xarray(dem_filename="/Users/jkingslake/Documents/science/meltwater_routing/BFRN_meltwater/python/notebooks/rema_subsets/dem_small_2.tif",
                melt_magnitude=0.1,
                x_center_of_melt: float = 817500.0,
                y_center_of_melt: float = 1.9325e6,
