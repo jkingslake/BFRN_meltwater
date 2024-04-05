@@ -288,10 +288,10 @@ def add_center_of_mass(results,
     results.x_center_of_mass.attrs = {'long_name': 'x coordinate of the center of mass', 'description': 'the x coordinate of the center of mass of the water, i.e. the depth-weighted centroid'}
     results.y_center_of_mass.attrs = {'long_name': 'y coordinate of the center of mass', 'description': 'the y coordinate of the center of mass of the water, i.e. the depth-weighted centroid'}
     results['L'] = ((results['x_center_of_mass'] - x_center_of_melt)**2 + (results['y_center_of_mass'] - y_center_of_melt)**2)**(1/2)
-    results.L.attrs = {'long_name': 'distance between the center of mass and the center of the melt region', 'description': 'the distance between the center of mass and the center of the melt region'}
+    results.L.attrs = {'units': 'm', 'long_name': 'distance between the center of mass and the center of the melt region', 'description': 'the distance between the center of mass and the center of the melt region'}
     return results
 
-def GL_flux(results):
+def add_GL_flux(results):
     """
     Calculate the change in the grounding line flux due to the change in ice shelf thickness due to water redistribution.
     
@@ -339,6 +339,49 @@ def GL_flux(results):
     total_GL_flux_response.attrs['description'] = 'The total instantaneous change in grounding line flux due to the change in ice shelf thickness in each cell due to water redistribution'
 
     return xr.merge([results, total_GL_flux_response])
+
+def add_water_flow_over_GL(results):
+    
+    def make_mask_subset():#dem_filename="../rema_subsets/dem_small_2.tif"):
+        #dem = rioxarray.open_rasterio(dem_filename)
+        #dem = dem.squeeze().drop('band')
+
+        mask = rioxarray.open_rasterio('/Users/jkingslake/Documents/science/meltwater_routing/BFRN_meltwater/data/Mask_Antarctica_v02.tif')   # https://n5eil01u.ecs.nsidc.org/MEASURES/NSIDC-0709.002/1992.02.07/Mask_Antarctica_v02.tif
+        mask = mask.squeeze().drop('band')
+
+        mask_subset = mask.interp_like(results.dem, method='nearest')
+
+        mask_subset = mask_subset.reset_coords(['spatial_ref'], drop=True)
+
+        return mask_subset
+    
+    mask_subset = make_mask_subset()
+    grounded = (mask_subset==255).astype(int)
+
+
+    def cellArea(ds):
+        dx = ds.x[1]-ds.x[0]
+        dy = ds.y[1]-ds.y[0]
+        area = dx*dy
+        return np.abs(area)
+
+    melt_on_grounded_ice = (results.melt*grounded).sum(dim=['x', 'y'])*cellArea(results)
+    melt_on_grounded_ice.name = 'melt_on_grounded_ice'
+    melt_on_grounded_ice.attrs['units'] = 'm^3'
+    melt_on_grounded_ice.attrs['long_name'] = "volume of melt originating on grounded ice"
+
+    
+    accumulation_on_grounded_ice = (results.water_depth*grounded).sum(dim=['x', 'y'])*cellArea(results)
+    accumulation_on_grounded_ice.name = 'accumulation_on_grounded_ice'
+    accumulation_on_grounded_ice.attrs['units'] = 'm^3'
+    accumulation_on_grounded_ice.attrs['long_name'] = "volume of melt accumulating on grounded ice"
+
+    water_flow_over_GL = melt_on_grounded_ice - accumulation_on_grounded_ice
+    water_flow_over_GL.name = 'water_flow_over_GL'
+    water_flow_over_GL.attrs['units'] = 'm^3'
+    water_flow_over_GL.attrs['long_name'] = "volume of water that flowed across over the grounding line"
+
+    return xr.merge([results, accumulation_on_grounded_ice, melt_on_grounded_ice, water_flow_over_GL])
 
 def fsm_xarray(dem_filename="/Users/jkingslake/Documents/science/meltwater_routing/BFRN_meltwater/python/notebooks/rema_subsets/dem_small_2.tif",
                melt_magnitude=0.1,
@@ -394,7 +437,9 @@ def fsm_xarray(dem_filename="/Users/jkingslake/Documents/science/meltwater_routi
                        x_center_of_melt, 
                        y_center_of_melt)
     
-    results = GL_flux(results)
+    results = add_GL_flux(results)
+
+    results = add_water_flow_over_GL(results)
     
     if sparse:
         results = replace_dense_with_sparse(results, 'water_depth')
@@ -451,6 +496,11 @@ def load_REMA_subset(ROIgeojson_filename= '../../../ROIs/boudouin_west_1.geojson
     - da_loaded (xarray.DataArray): Loaded data array if 'load' is True, otherwise None.
     """
     
+
+    import geopandas as gpd
+    import shapely
+
+
     if previously_loaded_da is None:
         # get the crs by reading one file
         da_for_crs = rioxarray.open_rasterio("https://storage.googleapis.com/pangeo-pgc/8m/50_39/50_39_8m_dem_COG_LZW.tif", chunks={})
