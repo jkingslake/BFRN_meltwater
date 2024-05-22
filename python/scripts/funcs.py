@@ -11,16 +11,215 @@ import pandas as pd
 hvplot.extension('bokeh')
 import sparse
 
+def gridSearchFSM(x_center_of_melt = [812500.0], 
+                  y_center_of_melt = [1930000, 1930000+5000], 
+                  melt_magnitude=[2], 
+                  post_funcs=[]) -> xr.core.dataset.Dataset:
+    
+    if not post_funcs:
+        post_funcs = [add_center_of_mass,
+                      add_GL_flux,
+                      add_dem,
+                      add_water_flow_over_GL]
+        
+    return gridSearch(fsm_xarray, x_center_of_melt = x_center_of_melt, y_center_of_melt = y_center_of_melt, melt_magnitude = melt_magnitude, 
+                         post_funcs=post_funcs)
 
-## Define a function for running fill-spill-merge
+def gridSearch(function: Callable, post_funcs: list = [], **kwargs) -> xr.core.dataset.Dataset:
+    """
+    Perform a grid search by iterating over all combinations of input parameters and running a given function.
 
+    Parameters:
+    function (callable): The function to be executed for each combination of input parameters. This function should return either an xarray dataset, an xarray datarray, or a numpy array.
+    **kwargs: Keyword arguments representing the input parameters and their corresponding values.
+    post_funcs (list): A list of functions to be executed after the grid search has been performed.
+
+    Returns:
+    xr_unstacked (xarray.core.dataset.Dataset): The concatenated and unstacked xarray dataset containing the results of the grid search.
+
+    Example:
+    #### Define a function to be executed for each combination of input parameters
+    def my_function(param1, param2):
+        ##### Perform some computation using the input parameters
+        result = param1 + param2
+        return result
+
+    #### Perform a grid search by iterating over all combinations of input parameters
+    results = gridSearch(my_function, param1=[1, 2, 3], param2=[4, 5])
+    
+    """
+
+    # extract the names of the parameters
+    p_names = [x for x in kwargs] 
+
+    # extract the values of the parameters
+    p_values_list = [x for x in kwargs.values()]
+    
+    # p_values_list should be a list of lists, if any items are not a list, then this 
+    # is because the user has only specified a single value for that parameter. 
+    # Loop through the list and convert any items that are not a list into a list containing the one item.
+    p_values_list = [[x] if not isinstance(x,list) else x for x in p_values_list]
+
+    # create a multiIndex from the parameter names and values
+    multiIndex = pd.MultiIndex.from_product(p_values_list, names=p_names)
+
+
+    #loop over every conbimation of parameters stored in multiIndex
+    xr_out_list = []
+    for mi in tqdm(multiIndex):
+
+        # create a dictionary of inputs for the function from the values stored in multiIndex
+        inputs = {p_names[x]: mi[x] for x in range(len(p_names))}
+
+        # run the function with this combination of inputs
+        single_iteration_result = function(**inputs)
+
+        # add coordinates to the result and store as as either a DataSet or a dataArray
+        if isinstance(single_iteration_result, xr.core.dataset.Dataset):
+            xr_out_new = single_iteration_result.assign_coords(inputs)
+        else:
+            xr_out_new = xr.DataArray(single_iteration_result, coords=inputs)    # use this line if the function returns a data array, or a numpy array
+        
+        # append the result to a list
+        xr_out_list.append(xr_out_new)
+
+    # concatenate the list of results into a single xarray
+    xr_stacked = xr.concat(xr_out_list, dim='stacked_dim')
+
+    # add the multiIndex to the xarray
+    mindex_coords = xr.Coordinates.from_pandas_multiindex(multiIndex, 'stacked_dim')
+    xr_stacked = xr_stacked.assign_coords(mindex_coords)
+
+    # unstack the xarray - i.e. separate the multiIndex into separate dimensions
+    xr_unstacked = xr_stacked.unstack()
+
+    # convert to a dataset if the result is a data array
+    if isinstance(xr_unstacked, xr.DataArray):
+        xr_unstacked.name = 'result'
+        xr_unstacked = xr_unstacked.to_dataset()
+
+    # run any post-processing functions
+    for post_func in post_funcs:
+        xr_unstacked = post_func(xr_unstacked)
+
+
+    return xr_unstacked
+
+def fsm_xarray(dem_filename="/Users/jkingslake/Documents/science/meltwater_routing/BFRN_meltwater/python/notebooks/rema_subsets/dem_small_2.tif",
+               melt_magnitude=0.1,
+               x_center_of_melt: float = 817500.0,
+               y_center_of_melt: float = 1.9325e6,
+               melt_width: float = 5000,
+               sparse: bool = False) -> xr.Dataset:
+    """
+    Perform meltwater routing using fill-spill-merge and output an xarray dataset.
+
+    Parameters:
+    - dem_filename (str): Path to the digital elevation model (DEM) file.
+    - melt_magnitude (float): Magnitude of the meltwater.
+    - x_center_of_melt (float): X-coordinate of the center of the melt region.
+    - y_center_of_melt (float): Y-coordinate of the center of the melt region.
+    - melt_width (float): Width of the melt region.
+    - sparse (bool): Whether to use sparse arrays for the melt and water_depth outputs (default: True).
+
+    Returns:
+    - results (xr.Dataset): Dataset containing the water depth, DEM, and melt data.
+
+    """    
+    
+    dem = rioxarray.open_rasterio(dem_filename, chunks={})
+    dem = dem.squeeze() 
+ 
+    melt, melt_filename, bounds = square_melt_region(dem, 
+                                                        melt_magnitude, 
+                                                        x_center_of_melt=x_center_of_melt, 
+                                                        y_center_of_melt=y_center_of_melt, 
+                                                        width=melt_width)  
+    water_depth = fsm(dem_filename, melt_filename=melt_filename)        
+    
+    # name the xr.DataArrays
+    water_depth.name = 'water_depth'
+    #dem.name = 'dem'
+    melt.name = 'melt'
+
+    
+
+    # add information about the coordinates and variables in attributes
+    melt.attrs = {'units': 'meters', 'long_name': 'surface melt', 'description': 'the surface melt as a function of x and y'}
+
+    # merge the xr.DataArrays into an xr.Dataset
+    results = xr.merge([water_depth,  melt])
+    results = results.drop_vars('band')   #  this variable isnt needed
+
+    # save parameter values as coordinates
+    results = results.assign_coords({'melt_magnitude': melt_magnitude, 'x_center_of_melt': x_center_of_melt, 'y_center_of_melt': y_center_of_melt, 'melt_width': melt_width})
+
+    # add the filename of the dem
+    results = results.assign_coords({'dem_filename': dem_filename})
+
+    # ad bounds of square melt region
+    bounds = np.array(bounds)
+    results['bounds'] = xr.DataArray(bounds, dims=['bounds_index'], name='bounds')
+    results.bounds.attrs = {'long_name': 'bounds of the rectangular melt region', 'description': 'the bounds of the rectangular melt region: (xmin, ymin, xmax, ymax)'}
+
+    #results = add_center_of_mass(results)
+    
+    #results = add_GL_flux(results)
+    
+    #results = add_dem(results)
+
+    #results = add_water_flow_over_GL(results)
+    
+    
+    if sparse:
+        results = replace_dense_with_sparse(results, 'water_depth')
+        results = replace_dense_with_sparse(results, 'melt')
+    
+    return results
+
+def rectangular_melt_region(dem: xr.DataArray, 
+                            melt_magnitude: float, 
+                            xmin: float = 815000, 
+                            xmax: float = 820000, 
+                            ymin: float = 1.93e6, 
+                            ymax: float = 1.935e6,
+                            melt_filename = "/Users/jkingslake/Documents/science/meltwater_routing/BFRN_meltwater/python/notebooks/rema_subsets/water_input_file_3.tif")\
+      -> Tuple[xr.DataArray, str, Tuple[float, float, float, float]]:
+    
+    # starting with the DEM, make a melt file with a rectangular region of non-zero melt
+    melt = dem.copy().squeeze()
+    melt[:, :] = 0
+    melt.loc[ymax:ymin, xmin:xmax] = melt_magnitude  # ymin and ymax are flipped because the y-axis is flipped
+    
+    # Save the melt file
+    melt.rio.to_raster(melt_filename)
+
+    melt_bounds = (xmin, ymin, xmax, ymax)
+    return melt, melt_filename, melt_bounds
+
+def square_melt_region(dem: xr.DataArray, 
+                       melt_magnitude: float, 
+                       x_center_of_melt: float = 817500, 
+                       y_center_of_melt: float = 1.9325e6, 
+                       width: float = 5000,
+                       melt_filename = "/Users/jkingslake/Documents/science/meltwater_routing/BFRN_meltwater/python/notebooks/rema_subsets/water_input_file_3.tif")\
+      -> Tuple[xr.DataArray, str, Tuple[float, float, float, float]]:
+    
+    xmin = x_center_of_melt - width/2
+    xmax = x_center_of_melt + width/2
+    ymin = y_center_of_melt - width/2
+    ymax = y_center_of_melt + width/2
+    melt, melt_filename, melt_bounds = rectangular_melt_region(dem, melt_magnitude, xmin, xmax, ymin, ymax, melt_filename)
+    
+    return melt, melt_filename, melt_bounds
+ 
 def fsm(dem_filename: str, 
         prefix: str = "/Users/jkingslake/Documents/science/meltwater_routing/BFRN_meltwater/python/notebooks/fsm_results/rema_tests/test-3", 
         uniform_melt: Optional[float] = None, 
         melt_filename: Optional[str] = None, 
         sea_level: float = 0.0,
-        path_to_fsm: str = "/Users/jkingslake/Documents/science/meltwater_routing/Barnes2020-FillSpillMerge/build/fsm.exe") -> xr.DataArray:
-    """
+        path_to_fsm: str = "/Users/jkingslake/Documents/science/meltwater_routing/main_fork_of_FSM_repo/Barnes2020-FillSpillMerge/build_old/fsm.exe") -> xr.DataArray:
+    """ 
     Runs the fill-spill-merge (FSM) algorithm on a digital elevation model (DEM) to calculate water depth.
 
     Parameters:
@@ -59,44 +258,154 @@ def fsm(dem_filename: str,
 
     return water_depth
 
-## Define two functions for creating a melt map 
-def rectangular_melt_region(dem: xr.DataArray, 
-                            melt_magnitude: float, 
-                            xmin: float = 815000, 
-                            xmax: float = 820000, 
-                            ymin: float = 1.93e6, 
-                            ymax: float = 1.935e6,
-                            melt_filename = "/Users/jkingslake/Documents/science/meltwater_routing/BFRN_meltwater/python/notebooks/rema_subsets/water_input_file_3.tif")\
-      -> Tuple[xr.DataArray, str, Tuple[float, float, float, float]]:
-    
-    # starting with the DEM, make a melt file with a rectangular region of non-zero melt
-    melt = dem.copy().squeeze()
-    melt[:, :] = 0
-    melt.loc[ymax:ymin, xmin:xmax] = melt_magnitude  # ymin and ymax are flipped because the y-axis is flipped
-    
-    # Save the melt file
-    melt.rio.to_raster(melt_filename)
+def add_dem(results):
+    """
+    Add the DEM to the results dataset.
 
-    melt_bounds = (xmin, ymin, xmax, ymax)
-    return melt, melt_filename, melt_bounds
+    Parameters:
+    - results (xr.Dataset): The output of fsm_xarray or gridSearch(function=fsm_xarray, ...)
 
-# call rectangular_melt_region to make a square melt region
-def square_melt_region(dem: xr.DataArray, 
-                       melt_magnitude: float, 
-                       x_center_of_melt: float = 817500, 
-                       y_center_of_melt: float = 1.9325e6, 
-                       width: float = 5000,
-                       melt_filename = "/Users/jkingslake/Documents/science/meltwater_routing/BFRN_meltwater/python/notebooks/rema_subsets/water_input_file_3.tif")\
-      -> Tuple[xr.DataArray, str, Tuple[float, float, float, float]]:
+    Returns:
+    - results (xr.Dataset): The input xr.Dataset with the addition of the DEM.
+
+    """
+    dem = rioxarray.open_rasterio(str(results.dem_filename.values), chunks={})
+    dem = dem.squeeze() 
+    dem.name = 'dem'
+    results['dem'] = dem
     
-    xmin = x_center_of_melt - width/2
-    xmax = x_center_of_melt + width/2
-    ymin = y_center_of_melt - width/2
-    ymax = y_center_of_melt + width/2
-    melt, melt_filename, melt_bounds = rectangular_melt_region(dem, melt_magnitude, xmin, xmax, ymin, ymax, melt_filename)
+    return results
+
+def add_center_of_mass(results):
+    """Add the center of mass of the water (see centroid_test.ipynb for notes on this method) """
+    weights = results.water_depth.fillna(0)
+    results['x_center_of_mass'] = results.x.weighted(weights).mean(dim = ['x', 'y'])
+    results['y_center_of_mass'] = results.y.weighted(weights).mean(dim = ['x', 'y'])
+    results.x_center_of_mass.attrs = {'long_name': 'x coordinate of the center of mass', 'description': 'the x coordinate of the center of mass of the water, i.e. the depth-weighted centroid'}
+    results.y_center_of_mass.attrs = {'long_name': 'y coordinate of the center of mass', 'description': 'the y coordinate of the center of mass of the water, i.e. the depth-weighted centroid'}
+    results['L'] = ((results['x_center_of_mass'] - results['x_center_of_melt'])**2 + (results['y_center_of_mass'] - results['y_center_of_melt'])**2)**(1/2)
+    results.L.attrs = {'units': 'm', 'long_name': 'distance between the center of mass and the center of the melt region', 'description': 'the distance between the center of mass and the center of the melt region'}
+    return results
+
+def add_GL_flux(results):
+    """
+    Calculate the change in the grounding line flux due to the change in ice shelf thickness due to water redistribution.
     
-    return melt, melt_filename, melt_bounds
+    Parameters:
+    - results (xr.Dataset): The output of fsm_xarray or gridSearch(function=fsm_xarray, ...)
+
+    Returns:
+    - results (xr.Dataset): The input xr.Dataset with the addition of the grounding line flux response.
+
+    Notes:
+    It calculates the change in grounding line flux multiplying the change in ice shelf thickness due to water redistribution by the butttssing flux response number (Reese et al. 2018, Nature Climate Change)
+
+    """
+    bfrn = xr.open_dataset('/Users/jkingslake/Documents/science/meltwater_routing/BFRN_meltwater/data/BFRN/bfrn.nc')   #  BFRN_meltwater/data/BFRN/load_BFRN.ipynb generates this file
+    bfrn = bfrn['__xarray_dataarray_variable__']
+    bfrn.name = 'bfrn'
     
+    bfrn_high_res = bfrn.interp_like(results, method='nearest')
+    bfrn_high_res.name = 'bfrn'
+    bfrn_high_res.attrs['description'] = bfrn.attrs['description']
+    bfrn_high_res.attrs['units'] = '1/yr'
+    bfrn_high_res.attrs['long_name'] = 'Buttressing flux response number'
+
+    redistribution_depth = -results['melt'] + results['water_depth']
+    redistribution_depth.attrs['units'] = 'm'
+    redistribution_depth.attrs['long_name'] = 'Redistribution depth'
+
+    x_resolution = results.x[1].values - results.x[0].values
+    assert x_resolution == np.abs(results.y[1].values - results.y[0].values)
+    resolution = x_resolution
+    cell_area = resolution**2
+
+    redistribution_volume_per_cell = redistribution_depth * cell_area
+    redistribution_volume_per_cell.name = 'redistribution_volume_per_cell'
+    redistribution_volume_per_cell.attrs['units'] = 'm3'
+    redistribution_mass_per_cell = redistribution_volume_per_cell * 1000
+    redistribution_mass_per_cell.name = 'redistribution_mass_per_cell'
+    redistribution_mass_per_cell.attrs['units'] = 'kg'
+
+    GL_flux_response_per_cell = -redistribution_mass_per_cell * bfrn_high_res  # Negative sign here because thinning is negative in redistribution_mass_per_cell, but thinning should lead to an increase in GL flux
+    GL_flux_response_per_cell.name = 'GL_flux_response_per_cell'
+    GL_flux_response_per_cell.attrs['description'] = 'The change in grounding line flux due to the change in ice shelf thickness in each cell due to melt and water redistribution'
+    GL_flux_response_per_cell.attrs['units'] = 'kg/yr'
+
+
+    total_GL_flux_response = GL_flux_response_per_cell.sum(dim=['x','y'])
+    total_GL_flux_response.name = 'total_GL_flux_response'
+    total_GL_flux_response.attrs['units'] = 'kg/yr'
+    total_GL_flux_response.attrs['description'] = 'The total instantaneous change in grounding line flux due to the change in ice shelf thickness resulting from melting and water redistribution'
+
+    return xr.merge([results, total_GL_flux_response, bfrn_high_res])
+
+def add_water_flow_over_GL(results):
+    
+    def make_mask_subset():#dem_filename="../rema_subsets/dem_small_2.tif"):
+        #dem = rioxarray.open_rasterio(dem_filename)
+        #dem = dem.squeeze().drop('band')
+
+        mask = rioxarray.open_rasterio('/Users/jkingslake/Documents/science/meltwater_routing/BFRN_meltwater/data/Mask_Antarctica_v02.tif')   # https://n5eil01u.ecs.nsidc.org/MEASURES/NSIDC-0709.002/1992.02.07/Mask_Antarctica_v02.tif
+        mask = mask.squeeze().drop('band')
+
+        mask_subset = mask.interp_like(results.dem, method='nearest')
+
+        mask_subset = mask_subset.reset_coords(['spatial_ref'], drop=True)
+
+        return mask_subset
+    
+    mask_subset = make_mask_subset()
+    grounded = (mask_subset==255).astype(int)
+
+    grounded.name = 'grounded_mask'
+    grounded.attrs['long_name'] = 'grounded ice mask'
+    grounded.attrs['description'] = '1 indicates grounded ice, 0 indicates floating ice or ocean, based on https://n5eil01u.ecs.nsidc.org/MEASURES/NSIDC-0709.002/1992.02.07/Mask_Antarctica_v02.tif'
+
+    def cellArea(ds):
+        dx = ds.x[1]-ds.x[0]
+        dy = ds.y[1]-ds.y[0]
+        area = dx*dy
+        return np.abs(area)
+
+    melt_on_grounded_ice = (results.melt*grounded).sum(dim=['x', 'y'])*cellArea(results)
+    melt_on_grounded_ice.name = 'melt_on_grounded_ice'
+    melt_on_grounded_ice.attrs['units'] = 'm^3'
+    melt_on_grounded_ice.attrs['long_name'] = "volume of melt originating on grounded ice"
+
+    
+    accumulation_on_grounded_ice = (results.water_depth*grounded).sum(dim=['x', 'y'])*cellArea(results)
+    accumulation_on_grounded_ice.name = 'accumulation_on_grounded_ice'
+    accumulation_on_grounded_ice.attrs['units'] = 'm^3'
+    accumulation_on_grounded_ice.attrs['long_name'] = "volume of melt accumulating on grounded ice"
+
+    water_flow_over_GL = melt_on_grounded_ice - accumulation_on_grounded_ice
+    water_flow_over_GL.name = 'water_flow_over_GL'
+    water_flow_over_GL.attrs['units'] = 'm^3'
+    water_flow_over_GL.attrs['long_name'] = "volume of water that flowed across over the grounding line"
+
+    return xr.merge([results, accumulation_on_grounded_ice, melt_on_grounded_ice, water_flow_over_GL, grounded])
+
+def replace_dense_with_sparse(results: xr.Dataset, variable: str) -> xr.Dataset:
+    """
+    Replaces a dense variable in the results xr.DataSet with a sparse variable.
+
+    Parameters:
+        results (dict): The dictionary containing the results.
+        variable (str): The name of the variable to be replaced.
+
+    Returns:
+        dict: The updated results dictionary with the variable replaced by a sparse variable.
+
+    Notes:
+        see BFRN_meltwater/python/notebooks/sparse.ipynb for notes on this. 
+    """
+    sparse_variable = sparse.COO.from_numpy(results[variable].values) 
+    results[variable].values = sparse_variable
+    return results
+
+
+   
 def loop_over_melt_magnitudes(dem_filename = "rema_subsets/dem_small_2.tif",
                             x_center_of_melt: float = 817500,
                             y_center_of_melt: float = 1.9325e6,
@@ -196,275 +505,11 @@ def loop_over_melt_magnitudes(dem_filename = "rema_subsets/dem_small_2.tif",
 
 def map_water_depth(results, coarsen_x=10, coarsen_y=10, width=500, height=500):
     coarse = results.coarsen(x=coarsen_x, y=coarsen_y, boundary='trim').mean()
-    plot = coarse.water_depth.hvplot(x ='y', y = 'x', cmap='Blues', clim=(0,1), width = width, height = height, aspect='equal')\
-        * coarse.dem.hvplot.contour(x ='y', y = 'x',levels = 40, cmap='hot')\
-        * coarse.melt.hvplot.contour(x ='y', y = 'x', levels=[0.0, 0.0])\
-        * coarse.hvplot.scatter(x = 'y_center_of_mass', y = 'x_center_of_mass', color = 'green', size = 400, marker = '*')
+    plot = coarse.water_depth.hvplot(x ='y', y = 'x', cmap='Blues', clim=(0,1), aspect='equal').opts(framewise=False)\
+        * coarse.dem.hvplot.contour(x ='y', y = 'x',levels = 40, cmap='hot', aspect='equal').opts(framewise=False)\
+        * coarse.melt.hvplot.contour(x ='y', y = 'x', levels=[0.0, 0.0], aspect='equal').opts(framewise=False)\
+        * coarse.hvplot.scatter(x = 'y_center_of_mass', y = 'x_center_of_mass', color = 'green', size = 400, marker = '*', aspect='equal').opts(framewise=False)
     return plot
-
-def gridSearch(function: Callable, **kwargs) -> xr.core.dataset.Dataset:
-    """
-    Perform a grid search by iterating over all combinations of input parameters and running a given function.
-
-    Parameters:
-    function (callable): The function to be executed for each combination of input parameters. This function should return either an xarray dataset, an xarray datarray, or a numpy array.
-    **kwargs: Keyword arguments representing the input parameters and their corresponding values.
-
-    Returns:
-    xr_unstacked (xarray.core.dataset.Dataset): The concatenated and unstacked xarray dataset containing the results of the grid search.
-
-    Example:
-    #### Define a function to be executed for each combination of input parameters
-    def my_function(param1, param2):
-        ##### Perform some computation using the input parameters
-        result = param1 + param2
-        return result
-
-    #### Perform a grid search by iterating over all combinations of input parameters
-    results = gridSearch(my_function, param1=[1, 2, 3], param2=[4, 5])
-    
-    """
-
-    # extract the names of the parameters
-    p_names = [x for x in kwargs] 
-
-    # extract the values of the parameters
-    p_values_list = [x for x in kwargs.values()]
-    
-    # p_values_list should be a list of lists, if any items are not a list, then this 
-    # is because the user has only specified a single value for that parameter. 
-    # Loop through the list and convert any items that are not a list into a list containing the one item.
-    p_values_list = [[x] if not isinstance(x,list) else x for x in p_values_list]
-
-    # create a multiIndex from the parameter names and values
-    multiIndex = pd.MultiIndex.from_product(p_values_list, names=p_names)
-
-
-    #loop over every conbimation of parameters stored in multiIndex
-    xr_out_list = []
-    for mi in tqdm(multiIndex):
-
-        # create a dictionary of inputs for the function from the values stored in multiIndex
-        inputs = {p_names[x]: mi[x] for x in range(len(p_names))}
-
-        # run the function with this combination of inputs
-        single_iteration_result = function(**inputs)
-
-        # add coordinates to the result and store as as either a DataSet or a dataArray
-        if isinstance(single_iteration_result, xr.core.dataset.Dataset):
-            xr_out_new = single_iteration_result.assign_coords(inputs)
-        else:
-            xr_out_new = xr.DataArray(single_iteration_result, coords=inputs)    # use this line if the function returns a data array, or a numpy array
-        
-        # append the result to a list
-        xr_out_list.append(xr_out_new)
-
-    # concatenate the list of results into a single xarray
-    xr_stacked = xr.concat(xr_out_list, dim='stacked_dim')
-
-    # add the multiIndex to the xarray
-    mindex_coords = xr.Coordinates.from_pandas_multiindex(multiIndex, 'stacked_dim')
-    xr_stacked = xr_stacked.assign_coords(mindex_coords)
-
-    # unstack the xarray - i.e. separate the multiIndex into separate dimensions
-    xr_unstacked = xr_stacked.unstack()
-
-    # convert to a dataset if the result is a data array
-    if isinstance(xr_unstacked, xr.DataArray):
-        xr_unstacked.name = 'result'
-        xr_unstacked = xr_unstacked.to_dataset()
-
-
-    return xr_unstacked
-
-
-def add_center_of_mass(results, 
-                       x_center_of_melt, 
-                       y_center_of_melt):
-    """Add the center of mass of the water (see centroid_test.ipynb for notes on this method) """
-    weights = results.water_depth.fillna(0)
-    results['x_center_of_mass'] = results.x.weighted(weights).mean(dim = ['x', 'y'])
-    results['y_center_of_mass'] = results.y.weighted(weights).mean(dim = ['x', 'y'])
-    results.x_center_of_mass.attrs = {'long_name': 'x coordinate of the center of mass', 'description': 'the x coordinate of the center of mass of the water, i.e. the depth-weighted centroid'}
-    results.y_center_of_mass.attrs = {'long_name': 'y coordinate of the center of mass', 'description': 'the y coordinate of the center of mass of the water, i.e. the depth-weighted centroid'}
-    results['L'] = ((results['x_center_of_mass'] - x_center_of_melt)**2 + (results['y_center_of_mass'] - y_center_of_melt)**2)**(1/2)
-    results.L.attrs = {'units': 'm', 'long_name': 'distance between the center of mass and the center of the melt region', 'description': 'the distance between the center of mass and the center of the melt region'}
-    return results
-
-def add_GL_flux(results):
-    """
-    Calculate the change in the grounding line flux due to the change in ice shelf thickness due to water redistribution.
-    
-    Parameters:
-    - results (xr.Dataset): The output of fsm_xarray or gridSearch(function=fsm_xarray, ...)
-
-    Returns:
-    - results (xr.Dataset): The input xr.Dataset with the addition of the grounding line flux response.
-
-    Notes:
-    It calculates the change in grounding line flux multiplying the change in ice shelf thickness due to water redistribution by the butttssing flux response number (Reese et al. 2018, Nature Climate Change)
-
-    """
-    bfrn = xr.open_dataset('/Users/jkingslake/Documents/science/meltwater_routing/BFRN_meltwater/data/BFRN/bfrn.nc')   #  BFRN_meltwater/data/BFRN/load_BFRN.ipynb generates this file
-    bfrn = bfrn['__xarray_dataarray_variable__']
-    bfrn.name = 'bfrn'
-    
-    bfrn_high_res = bfrn.interp_like(results, method='nearest')
-
-    redistribution_depth = -results['melt'] + results['water_depth']
-    redistribution_depth.attrs['units'] = 'm'
-    redistribution_depth.attrs['long_name'] = 'Redistribution depth'
-
-    x_resolution = results.x[1].values - results.x[0].values
-    assert x_resolution == np.abs(results.y[1].values - results.y[0].values)
-    resolution = x_resolution
-    cell_area = resolution**2
-
-    redistribution_volume_per_cell = redistribution_depth * cell_area
-    redistribution_volume_per_cell.name = 'redistribution_volume_per_cell'
-    redistribution_volume_per_cell.attrs['units'] = 'm3'
-    redistribution_mass_per_cell = redistribution_volume_per_cell * 1000
-    redistribution_mass_per_cell.name = 'redistribution_mass_per_cell'
-    redistribution_mass_per_cell.attrs['units'] = 'kg'
-
-    GL_flux_response_per_cell = -redistribution_mass_per_cell * bfrn_high_res
-    GL_flux_response_per_cell.name = 'GL_flux_response_per_cell'
-    GL_flux_response_per_cell.attrs['description'] = 'The change in grounding line flux due to the change in ice shelf thickness in each cell fue to water redistribution'
-    GL_flux_response_per_cell.attrs['units'] = 'kg/yr'
-
-
-    total_GL_flux_response = GL_flux_response_per_cell.sum(dim=['x','y'])
-    total_GL_flux_response.name = 'total_GL_flux_response'
-    total_GL_flux_response.attrs['units'] = 'kg/yr'
-    total_GL_flux_response.attrs['description'] = 'The total instantaneous change in grounding line flux due to the change in ice shelf thickness in each cell due to water redistribution'
-
-    return xr.merge([results, total_GL_flux_response])
-
-def add_water_flow_over_GL(results):
-    
-    def make_mask_subset():#dem_filename="../rema_subsets/dem_small_2.tif"):
-        #dem = rioxarray.open_rasterio(dem_filename)
-        #dem = dem.squeeze().drop('band')
-
-        mask = rioxarray.open_rasterio('/Users/jkingslake/Documents/science/meltwater_routing/BFRN_meltwater/data/Mask_Antarctica_v02.tif')   # https://n5eil01u.ecs.nsidc.org/MEASURES/NSIDC-0709.002/1992.02.07/Mask_Antarctica_v02.tif
-        mask = mask.squeeze().drop('band')
-
-        mask_subset = mask.interp_like(results.dem, method='nearest')
-
-        mask_subset = mask_subset.reset_coords(['spatial_ref'], drop=True)
-
-        return mask_subset
-    
-    mask_subset = make_mask_subset()
-    grounded = (mask_subset==255).astype(int)
-
-
-    def cellArea(ds):
-        dx = ds.x[1]-ds.x[0]
-        dy = ds.y[1]-ds.y[0]
-        area = dx*dy
-        return np.abs(area)
-
-    melt_on_grounded_ice = (results.melt*grounded).sum(dim=['x', 'y'])*cellArea(results)
-    melt_on_grounded_ice.name = 'melt_on_grounded_ice'
-    melt_on_grounded_ice.attrs['units'] = 'm^3'
-    melt_on_grounded_ice.attrs['long_name'] = "volume of melt originating on grounded ice"
-
-    
-    accumulation_on_grounded_ice = (results.water_depth*grounded).sum(dim=['x', 'y'])*cellArea(results)
-    accumulation_on_grounded_ice.name = 'accumulation_on_grounded_ice'
-    accumulation_on_grounded_ice.attrs['units'] = 'm^3'
-    accumulation_on_grounded_ice.attrs['long_name'] = "volume of melt accumulating on grounded ice"
-
-    water_flow_over_GL = melt_on_grounded_ice - accumulation_on_grounded_ice
-    water_flow_over_GL.name = 'water_flow_over_GL'
-    water_flow_over_GL.attrs['units'] = 'm^3'
-    water_flow_over_GL.attrs['long_name'] = "volume of water that flowed across over the grounding line"
-
-    return xr.merge([results, accumulation_on_grounded_ice, melt_on_grounded_ice, water_flow_over_GL])
-
-def fsm_xarray(dem_filename="/Users/jkingslake/Documents/science/meltwater_routing/BFRN_meltwater/python/notebooks/rema_subsets/dem_small_2.tif",
-               melt_magnitude=0.1,
-               x_center_of_melt: float = 817500.0,
-               y_center_of_melt: float = 1.9325e6,
-               melt_width: float = 5000,
-               sparse: bool = True) -> xr.Dataset:
-    """
-    Perform meltwater routing using fill-spill-merge and output an xarray dataset.
-
-    Parameters:
-    - dem_filename (str): Path to the digital elevation model (DEM) file.
-    - melt_magnitude (float): Magnitude of the meltwater.
-    - x_center_of_melt (float): X-coordinate of the center of the melt region.
-    - y_center_of_melt (float): Y-coordinate of the center of the melt region.
-    - melt_width (float): Width of the melt region.
-    - sparse (bool): Whether to use sparse arrays for the mlet and water_depth outputs (default: True).
-
-    Returns:
-    - results (xr.Dataset): Dataset containing the water depth, DEM, and melt data.
-
-    """
-
-    # Load the DEM
-    dem = rioxarray.open_rasterio(dem_filename, chunks={})
-    dem = dem.squeeze()
-
- 
-    melt, melt_filename, bounds = square_melt_region(dem, 
-                                                        melt_magnitude, 
-                                                        x_center_of_melt=x_center_of_melt, 
-                                                        y_center_of_melt=y_center_of_melt, 
-                                                        width=melt_width)  
-    water_depth = fsm(dem_filename, melt_filename=melt_filename)        
-    
-    # name the xr.DataArrays
-    water_depth.name = 'water_depth'
-    dem.name = 'dem'
-    melt.name = 'melt'
-
-    # add information about the coordinates and variables in attributes
-    melt.attrs = {'units': 'meters', 'long_name': 'surface melt', 'description': 'the surface melt as a function of x and y'}
-
-    # merge the xr.DataArrays into a xr.Dataset
-    results = xr.merge([water_depth, dem, melt])
-    results = results.drop_vars('band')   # drop this unneeded variable
-
-    bounds = np.array(bounds)
-    results['bounds'] = xr.DataArray(bounds, dims=['bounds_index'], name='bounds')
-    results.bounds.attrs = {'long_name': 'bounds of the rectangular melt region', 'description': 'the bounds of the rectangular melt region: (xmin, ymin, xmax, ymax)'}
-
-    results = add_center_of_mass(results, 
-                       x_center_of_melt, 
-                       y_center_of_melt)
-    
-    results = add_GL_flux(results)
-
-    results = add_water_flow_over_GL(results)
-    
-    if sparse:
-        results = replace_dense_with_sparse(results, 'water_depth')
-        results = replace_dense_with_sparse(results, 'melt')
-    
-    return results
-
-def replace_dense_with_sparse(results: xr.Dataset, variable: str) -> xr.Dataset:
-    """
-    Replaces a dense variable in the results xr.DataSet with a sparse variable.
-
-    Parameters:
-        results (dict): The dictionary containing the results.
-        variable (str): The name of the variable to be replaced.
-
-    Returns:
-        dict: The updated results dictionary with the variable replaced by a sparse variable.
-
-    Notes:
-        see BFRN_meltwater/python/notebooks/sparse.ipynb for notes on this. 
-    """
-    sparse_variable = sparse.COO.from_numpy(results[variable].values) 
-    results[variable].values = sparse_variable
-    return results
-
 
 def load_REMA_subset(ROIgeojson_filename= '../../../ROIs/boudouin_west_1.geojson',
                      decimate=None,
