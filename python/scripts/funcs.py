@@ -8,8 +8,9 @@ import subprocess
 import hvplot.xarray # noqa 
 from tqdm.autonotebook import tqdm
 import pandas as pd
+import pdemtools as pdt
 hvplot.extension('bokeh')
-import sparse
+#import sparse
 
 def gridSearchFSM(x_center_of_melt = [812500.0], 
                   y_center_of_melt = [1930000, 1930000+5000], 
@@ -25,7 +26,9 @@ def gridSearchFSM(x_center_of_melt = [812500.0],
     return gridSearch(fsm_xarray, x_center_of_melt = x_center_of_melt, y_center_of_melt = y_center_of_melt, melt_magnitude = melt_magnitude, 
                          post_funcs=post_funcs)
 
-def gridSearch(function: Callable, post_funcs: list = [], **kwargs) -> xr.core.dataset.Dataset:
+def gridSearch(function: Callable, 
+               post_funcs: list = [], 
+               **kwargs) -> xr.core.dataset.Dataset:
     """
     Perform a grid search by iterating over all combinations of input parameters and running a given function.
 
@@ -103,14 +106,18 @@ def gridSearch(function: Callable, post_funcs: list = [], **kwargs) -> xr.core.d
         xr_unstacked = post_func(xr_unstacked)
 
 
-    return xr_unstacked
+    return xr_unstacked.squeeze()  # remove any singleton dimensions
 
 def fsm_xarray(dem_filename="/Users/jkingslake/Documents/science/meltwater_routing/BFRN_meltwater/python/notebooks/rema_subsets/dem_small_2.tif",
-               melt_magnitude=0.1,
-               x_center_of_melt: float = 817500.0,
-               y_center_of_melt: float = 1.9325e6,
-               melt_width: float = 5000,
-               sparse: bool = False) -> xr.Dataset:
+                #path_to_fsm: str ="/Users/jkingslake/Documents/science/meltwater_routing/kerrys_fork_of_FSM/rebuild/Barnes2020-FillSpillMerge/build/fsm_boost.exe",
+                melt_magnitude=0.1,
+                x_center_of_melt: float = 817500.0,
+                y_center_of_melt: float = 1.9325e6,
+                melt_width: float = 5000,
+                sparse: bool = False,
+                save_dh = False,
+                load_dh = True,
+                verbose = False) -> xr.Dataset:
     """
     Perform meltwater routing using fill-spill-merge and output an xarray dataset.
 
@@ -135,14 +142,17 @@ def fsm_xarray(dem_filename="/Users/jkingslake/Documents/science/meltwater_routi
                                                         x_center_of_melt=x_center_of_melt, 
                                                         y_center_of_melt=y_center_of_melt, 
                                                         width=melt_width)  
-    water_depth = fsm(dem_filename, melt_filename=melt_filename)        
+    water_depth = fsm(dem_filename, 
+                        melt_filename=melt_filename,
+                        save_dh = save_dh,
+                        load_dh = load_dh,
+                        verbose = verbose
+                        )#, path_to_fsm=path_to_fsm)        
     
     # name the xr.DataArrays
     water_depth.name = 'water_depth'
     #dem.name = 'dem'
     melt.name = 'melt'
-
-    
 
     # add information about the coordinates and variables in attributes
     melt.attrs = {'units': 'meters', 'long_name': 'surface melt', 'description': 'the surface melt as a function of x and y'}
@@ -218,7 +228,10 @@ def fsm(dem_filename: str,
         uniform_melt: Optional[float] = None, 
         melt_filename: Optional[str] = None, 
         sea_level: float = 0.0,
-        path_to_fsm: str = "/Users/jkingslake/Documents/science/meltwater_routing/main_fork_of_FSM_repo/Barnes2020-FillSpillMerge/build_old/fsm.exe") -> xr.DataArray:
+        path_to_fsm: str = "/Users/jkingslake/Documents/science/meltwater_routing/kerrys_fork_of_FSM/rebuild/Barnes2020-FillSpillMerge/build/fsm_boost.exe",
+        save_dh = False,
+        load_dh = True,
+        verbose = False) -> xr.DataArray:
     """ 
     Runs the fill-spill-merge (FSM) algorithm on a digital elevation model (DEM) to calculate water depth.
 
@@ -240,17 +253,42 @@ def fsm(dem_filename: str,
     - This function is a wrapper for the fill-spill-merge algorithm.
     - The fill-spill-merge code also write the resulting water depth to a file ending with "-wtd.tif".
     """
-
-    if uniform_melt is not None:
-        subprocess.run([path_to_fsm, dem_filename, prefix, str(sea_level), "--swl=" + str(uniform_melt)], stdout=subprocess.DEVNULL)
-        #os.system(f"{path_to_fsm} {dem_filename} {prefix} {sea_level} --swl={uniform_melt}")
-
-    if melt_filename is not None:
-        subprocess.run([path_to_fsm, dem_filename, prefix, str(sea_level), "--swf=" + melt_filename], stdout=subprocess.DEVNULL)
-        #os.system(f"{path_to_fsm} {dem_filename} {prefix} {sea_level} --swf={melt_filename}")
+    prefix = dem_filename.split('.')[0] + '_out'
+    
+    if save_dh:
+        load_dh = False
 
     if uniform_melt is None and melt_filename is None:
         raise ValueError("Must specify either uniform_melt or melt_filename") 
+
+    if verbose:
+        stout = None
+    else:
+        stout = subprocess.DEVNULL
+
+    if uniform_melt is not None:
+        #subprocess.run([path_to_fsm, dem_filename, prefix, str(sea_level), "--swl=" + str(uniform_melt)], stdout=subprocess.DEVNULL)
+        #os.system(f"{path_to_fsm} {dem_filename} {prefix} {sea_level} --swl={uniform_melt}")
+        if save_dh:
+            subprocess.run([path_to_fsm, dem_filename, prefix, str(sea_level), "--swl=" + str(uniform_melt), '--save_dh', dem_filename +'_DH'], stdout = stout)
+        elif load_dh:
+            subprocess.run([path_to_fsm, dem_filename, prefix, str(sea_level), "--swl=" + str(uniform_melt), '--load_dh', dem_filename +'_DH'], stdout = stout)
+        else:
+            subprocess.run([path_to_fsm, dem_filename, prefix, str(sea_level), "--swl=" + str(uniform_melt)], stdout = stout)
+
+    if melt_filename is not None:
+        #subprocess.run([path_to_fsm, dem_filename, prefix, str(sea_level), "--swf=" + melt_filename])# stdout=subprocess.DEVNULL)
+        #os.system(f"{path_to_fsm} {dem_filename} {prefix} {sea_level} --swf={melt_filename}")
+        
+        if save_dh:
+            subprocess.run([path_to_fsm, dem_filename, prefix, str(sea_level),  "--swf=" + melt_filename, '--save_dh', dem_filename +'_DH'], stdout=stout)
+        elif load_dh:
+            subprocess.run([path_to_fsm, dem_filename, prefix, str(sea_level),  "--swf=" + melt_filename, '--load_dh', dem_filename +'_DH'], stdout=stout)
+        else:
+            subprocess.run([path_to_fsm, dem_filename, prefix, str(sea_level),  "--swf=" + melt_filename], stdout=stout)
+
+        
+        #subprocess.run([path_to_fsm, dem_filename, prefix, str(sea_level),  "--swf=" + melt_filename, '--load_dh', dem_filename +'_DH_2'])#, stdout=subprocess.DEVNULL)
 
     #surface_height = rioxarray.open_rasterio(prefix + "surface-height.tif").squeeze()
     water_depth = rioxarray.open_rasterio(prefix + "-wtd.tif").squeeze()
@@ -269,7 +307,7 @@ def add_dem(results):
     - results (xr.Dataset): The input xr.Dataset with the addition of the DEM.
 
     """
-    dem = rioxarray.open_rasterio(str(results.dem_filename.values), chunks={})
+    dem = rioxarray.open_rasterio(str(results.dem_filename.item()), chunks={})
     dem = dem.squeeze() 
     dem.name = 'dem'
     results['dem'] = dem
@@ -340,6 +378,9 @@ def add_GL_flux(results):
 
     return xr.merge([results, total_GL_flux_response, bfrn_high_res])
 
+
+
+
 def add_water_flow_over_GL(results):
     
     def make_mask_subset():#dem_filename="../rema_subsets/dem_small_2.tif"):
@@ -362,17 +403,20 @@ def add_water_flow_over_GL(results):
     grounded.attrs['long_name'] = 'grounded ice mask'
     grounded.attrs['description'] = '1 indicates grounded ice, 0 indicates floating ice or ocean, based on https://n5eil01u.ecs.nsidc.org/MEASURES/NSIDC-0709.002/1992.02.07/Mask_Antarctica_v02.tif'
 
-    def cellArea(ds):
-        dx = ds.x[1]-ds.x[0]
-        dy = ds.y[1]-ds.y[0]
-        area = dx*dy
-        return np.abs(area)
+    melt_total = results.melt.sum(dim=['x', 'y'])*cellArea(results)
+    melt_total.name = 'melt_total'
+    melt_total.attrs['units'] = 'm^3'
+    melt_total.attrs['long_name'] = "total volume of melt"
 
+    accumulation_total = results.water_depth.sum(dim=['x', 'y'])*cellArea(results)
+    accumulation_total.name = 'accumulation_total'
+    accumulation_total.attrs['units'] = 'm^3'
+    accumulation_total.attrs['long_name'] = "total volume of accumulated water"
+    
     melt_on_grounded_ice = (results.melt*grounded).sum(dim=['x', 'y'])*cellArea(results)
     melt_on_grounded_ice.name = 'melt_on_grounded_ice'
     melt_on_grounded_ice.attrs['units'] = 'm^3'
     melt_on_grounded_ice.attrs['long_name'] = "volume of melt originating on grounded ice"
-
     
     accumulation_on_grounded_ice = (results.water_depth*grounded).sum(dim=['x', 'y'])*cellArea(results)
     accumulation_on_grounded_ice.name = 'accumulation_on_grounded_ice'
@@ -384,7 +428,7 @@ def add_water_flow_over_GL(results):
     water_flow_over_GL.attrs['units'] = 'm^3'
     water_flow_over_GL.attrs['long_name'] = "volume of water that flowed across over the grounding line"
 
-    return xr.merge([results, accumulation_on_grounded_ice, melt_on_grounded_ice, water_flow_over_GL, grounded])
+    return xr.merge([results, accumulation_on_grounded_ice, melt_on_grounded_ice, water_flow_over_GL, grounded, accumulation_total, melt_total])
 
 def replace_dense_with_sparse(results: xr.Dataset, variable: str) -> xr.Dataset:
     """
@@ -404,8 +448,6 @@ def replace_dense_with_sparse(results: xr.Dataset, variable: str) -> xr.Dataset:
     results[variable].values = sparse_variable
     return results
 
-
-   
 def loop_over_melt_magnitudes(dem_filename = "rema_subsets/dem_small_2.tif",
                             x_center_of_melt: float = 817500,
                             y_center_of_melt: float = 1.9325e6,
@@ -511,7 +553,126 @@ def map_water_depth(results, coarsen_x=10, coarsen_y=10, width=500, height=500):
         * coarse.hvplot.scatter(x = 'y_center_of_mass', y = 'x_center_of_mass', color = 'green', size = 400, marker = '*', aspect='equal').opts(framewise=False)
     return plot
 
-def load_REMA_subset(ROIgeojson_filename= '../../../ROIs/boudouin_west_1.geojson',
+def load_REMA_subset(ROIgeojson_filename= '/Users/jkingslake/Documents/science/meltwater_routing/ROIs/boudouin_west_1.geojson',
+                     bounds = None,
+                     decimate=None,
+                     coarsen=None,
+                     rechunk=False,
+                     save_tiff=True,
+                     tiff_filename='/Users/jkingslake/Documents/science/meltwater_routing/big_data/REMA_subset_new.tif',
+                     save_zarr=False,
+                     zarr_filename='/Users/jkingslake/Documents/science/meltwater_routing/big_data/REMA_subset_new.zarr',
+                     load=False,
+                     save_dh=True,
+                     chunksize=512*8):
+    """
+    Loads a subset of REMA (Reference Elevation Model of Antarctica) data based on a given region of interest (ROI).
+
+    Parameters:
+    - ROIgeojson_filename (str): Path to the ROI geojson file.
+    - decimate (int): Decimation factor for subsampling the data. Default is None.
+    - coarsen (int): Coarsening factor for aggregating the data. Default is None.
+    - rechunk (bool): Flag indicating whether to rechunk the data. Default is False.
+    - save_tiff (bool): Flag indicating whether to save the data as a TIFF file. Default is True.
+    - tiff_filename (str): Path to save the TIFF file. Default is '/Users/jkingslake/Documents/science/meltwater_routing/big_data/REMA_subset.tif'.
+    - save_zarr (bool): Flag indicating whether to save the data as a Zarr file. Default is False.
+    - zarr_filename (str): Path to save the Zarr file. Default is '/Users/jkingslake/Documents/science/meltwater_routing/big_data/REMA_subset.zarr'.
+    - load (bool): Flag indicating whether to load the data into memory. Default is False.
+    - previously_loaded_da (xarray.DataArray): Previously loaded data array. Default is None.
+    - compute_dephier (bool): Flag indicating whether to compute and save the depression heirachy of the DEM subset using fill-spill-merge. Default is True.
+
+    Returns:
+    - da (xarray.DataArray): Subset of REMA data based on the ROI.
+    - da_loaded (xarray.DataArray): Loaded data array if 'load' is True, otherwise None.
+    """
+    import geopandas as gpd
+    import shapely
+
+    # get the crs by reading one file
+    da_for_crs = rioxarray.open_rasterio("https://storage.googleapis.com/pangeo-pgc/8m/50_39/50_39_8m_dem_COG_LZW.tif", chunks={})
+
+    import os
+    # Load a geojson file created on geojson.io
+    #print(os.getcwd())
+    ROI = gpd.read_file(ROIgeojson_filename)
+    ROI.to_crs(da_for_crs.spatial_ref.attrs['crs_wkt'],inplace=True)
+
+    #read in the REMA tile index
+    #REMA_index = gpd.read_file('../../../../../REMAWaterRouting/REMA_Tile_Index/REMA_Tile_Index_Rel1_1.shp')
+
+    #get the bounds of the ROI
+    [minx,miny,maxx,maxy] = ROI.bounds.values.tolist()[0]
+
+    if bounds is None:
+        #if no bounds are provided, use the bounds of the ROI
+        bounds = [minx,miny,maxx,maxy]
+    
+    ##create a shapely polygon from the bounds
+    #bbox = shapely.geometry.Polygon([[minx,miny],[maxx,miny],[maxx,maxy],[minx,maxy],[minx,miny]])
+
+    da = pdt.load.mosaic(
+        dataset='rema',  # must be `arcticdem` or `rema`
+        resolution=32,        # must be 2, 10, or 32
+        bounds=bounds,
+        chunks = True)
+
+    #da = da.squeeze()
+    #da = da.sel(x=slice(minx,maxx),y=slice(maxy,miny))
+
+    da_loaded = None
+    if load:
+        da.load()
+        da_loaded = da.copy()
+
+    if decimate:
+        da = da.isel(x=slice(0,da.x.shape[0],decimate),y=slice(0,da.y.shape[0],decimate))
+        print(f"Resolution after decimation is {(da.x[1]-da.x[0]).values} m")
+        da.load()
+
+
+    if coarsen:
+        da = da.coarsen(x=coarsen, y=coarsen, boundary='trim').mean()
+        print(f"Resolution after coarsening is {(da.x[1]-da.x[0]).values} m")
+        da.load()        
+
+    if rechunk:
+        da = da.chunk({'x':chunksize,'y':chunksize})
+
+    #add ocean cells around the edge of the DEM
+    da[0:1,:] = 0.0 
+    da[-1:,:] = 0.0
+    da[:,0:1] = 0.0
+    da[:,-1:] = 0.0
+
+    #fill NaNs with zeros
+    da = da.fillna(0.0)
+
+    if save_tiff or save_dh:
+        da.rio.to_raster(tiff_filename)
+    
+    if save_zarr:
+        da.to_zarr(zarr_filename)
+
+    #if compute_dephier:
+    #    subprocess.run(['/Users/jkingslake/Documents/science/meltwater_routing/richdem/build/apps/rd_fill_spill_merge.exe', tiff_filename, 'ignore', '0', '--swl', '0.1', '--save_dh', 'temp_DH'])#, stdout=subprocess.DEVNULL)
+
+    if save_dh:
+        compute_depression_hierarchy(tiff_filename)
+
+    return da, da_loaded
+
+def compute_depression_hierarchy(tiff_filename):
+    """ Computes the depression hierarchy and stores it in a file with the same name as the DEM tiff file but with '_DH' appended. """
+    fsm(dem_filename = tiff_filename, uniform_melt=0, save_dh = True)
+
+def cellArea(ds):
+    dx = ds.x[1]-ds.x[0]
+    dy = ds.y[1]-ds.y[0]
+    area = dx*dy
+    return np.abs(area)
+
+
+def load_REMA_subset_OLD(ROIgeojson_filename= '../../../../ROIs/boudouin_west_1.geojson',
                      decimate=None,
                      coarsen=None,
                      rechunk=False,
@@ -520,7 +681,8 @@ def load_REMA_subset(ROIgeojson_filename= '../../../ROIs/boudouin_west_1.geojson
                      save_zarr=False,
                      zarr_filename='/Users/jkingslake/Documents/science/meltwater_routing/big_data/REMA_subset.zarr',
                      load=False,
-                     previously_loaded_da=None):
+                     previously_loaded_da=None,
+                     compute_dephier=True):
     """
     Loads a subset of REMA (Reference Elevation Model of Antarctica) data based on a given region of interest (ROI).
 
@@ -535,6 +697,7 @@ def load_REMA_subset(ROIgeojson_filename= '../../../ROIs/boudouin_west_1.geojson
     - zarr_filename (str): Path to save the Zarr file. Default is '/Users/jkingslake/Documents/science/meltwater_routing/big_data/REMA_subset.zarr'.
     - load (bool): Flag indicating whether to load the data into memory. Default is False.
     - previously_loaded_da (xarray.DataArray): Previously loaded data array. Default is None.
+    - compute_dephier (bool): Flag indicating whether to compute and save the depression heirachy of the DEM subset using fill-spill-merge. Default is True.
 
     Returns:
     - da (xarray.DataArray): Subset of REMA data based on the ROI.
@@ -550,12 +713,14 @@ def load_REMA_subset(ROIgeojson_filename= '../../../ROIs/boudouin_west_1.geojson
         # get the crs by reading one file
         da_for_crs = rioxarray.open_rasterio("https://storage.googleapis.com/pangeo-pgc/8m/50_39/50_39_8m_dem_COG_LZW.tif", chunks={})
 
+        import os
         # Load a geojson file created on geojson.io
+        print(os.getcwd())
         ROI = gpd.read_file(ROIgeojson_filename)
         ROI.to_crs(da_for_crs.spatial_ref.attrs['crs_wkt'],inplace=True)
 
         #read in the REMA tile index
-        REMA_index = gpd.read_file('../../../../REMAWaterRouting/REMA_Tile_Index/REMA_Tile_Index_Rel1_1.shp')
+        REMA_index = gpd.read_file('../../../../../REMAWaterRouting/REMA_Tile_Index/REMA_Tile_Index_Rel1_1.shp')
 
         #get the bounds of the ROI
         [minx,miny,maxx,maxy]= ROI.bounds.values.tolist()[0]
@@ -637,4 +802,8 @@ def load_REMA_subset(ROIgeojson_filename= '../../../ROIs/boudouin_west_1.geojson
     if save_zarr:
         da.to_zarr(zarr_filename)
 
+    #if compute_dephier:
+    #    subprocess.run(['/Users/jkingslake/Documents/science/meltwater_routing/richdem/build/apps/rd_fill_spill_merge.exe', tiff_filename, 'ignore', '0', '--swl', '0.1', '--save_dh', 'temp_DH'])#, stdout=subprocess.DEVNULL)
+
     return da, da_loaded
+
