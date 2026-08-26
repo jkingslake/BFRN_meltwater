@@ -100,7 +100,8 @@ def fsm(dem,
         melt,
         sparse: bool = False,
         dh = None,
-        ocean_level: float = 0.0
+        ocean_level: float = 0.0,
+        add_dem: bool = True
         ) -> xr.Dataset:
     """
     Perform meltwater routing using fill-spill-merge and output an xarray dataset.
@@ -117,9 +118,7 @@ def fsm(dem,
 
     """    
     dem = dem.squeeze() 
-    dem.name = 'dem'
-    dem.attrs = {'units': 'm', 'long_name': 'surface elevation', 'description': 'elevation above sea level'}
-
+    
     if melt is None:
         raise ValueError("Must specify melt")
 
@@ -132,8 +131,6 @@ def fsm(dem,
         ocean_level=ocean_level,
         return_hierarchy=True,)
 
-
-
     water_depth = fill_spill_merge(wtd=melt, hierarchy=dh)
     
     # name the xr.DataArrays
@@ -143,40 +140,42 @@ def fsm(dem,
     # add attributes
     melt.attrs = {'units': 'm', 'long_name': 'surface melt', 'description': 'the surface melt as a function of x and y'}
 
-
-    
+    dem.name = 'dem'
+    dem.attrs = {'units': 'm', 'long_name': 'surface elevation', 'description': 'elevation above sea level'}
     results = xr.merge([water_depth,  melt, dem])
-
-
 
     # merge the xr.DataArrays into an xr.Dataset
     results = results.drop_vars('band')   #  this variable isnt needed
-
-    # # save parameter values as coordinates
-    # results = results.assign_coords({'melt_magnitude': melt_magnitude, 'x_center_of_melt': x_center_of_melt, 'y_center_of_melt': y_center_of_melt, 'melt_width': melt_width})
-
-    # # add the filename of the dem
-    # results = results.assign_coords({'dem_filename': dem_filename})
-
-    # # ad bounds of square melt region
-    # bounds = np.array(bounds)
-    # results['bounds'] = xr.DataArray(bounds, dims=['bounds_index'], name='bounds')
-    # results.bounds.attrs = {'long_name': 'bounds of the rectangular melt region', 'description': 'the bounds of the rectangular melt region: (xmin, ymin, xmax, ymax)'}
 
     results = add_center_of_mass(results)
     
     results = add_GL_flux(results)
     
     results = add_water_flow_over_GL(results)
-    
+
+    results = add_stream(results)
     
     if sparse:
         results = replace_dense_with_sparse(results, 'water_depth')
         results = replace_dense_with_sparse(results, 'melt')
+
+    if add_dem is False:
+        results = results.drop_vars('dem') 
+
     
     return results
 
+def add_stream(results):
+    import xrspatial
+    fdir = xrspatial.flow_direction(results['dem'] + results['water_depth'], routing='dinf')
+    acc = xrspatial.flow_accumulation(fdir, routing='dinf')
+    results['flow_direction'] = fdir
+    results['flow_direction'].attrs = {'long_name': 'flow direction', 'description': 'the direction of flow, computed with xrspatial.flow_direction using Dinf', 'units': 'radians'}
 
+    results['flow_accumulation'] = acc
+    results['flow_accumulation'].attrs = {'long_name': 'flow accumulation', 'description': 'the number of cells that drain to each cell, computed with xrspatial.flow_accumulation using Dinf', 'units': 'number of cells'}
+
+    return results
 
 def rectangular_melt_region(dem: xr.DataArray, 
                             melt_magnitude: float, 
