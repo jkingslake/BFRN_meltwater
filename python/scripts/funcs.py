@@ -101,7 +101,7 @@ def fsm(dem,
         sparse: bool = False,
         dh = None,
         ocean_level: float = 0.0,
-        add_dem: bool = False
+        add_dem: bool = True
         ) -> xr.Dataset:
     """
     Perform meltwater routing using fill-spill-merge and output an xarray dataset.
