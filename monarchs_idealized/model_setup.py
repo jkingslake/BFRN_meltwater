@@ -110,10 +110,17 @@ vars_to_save = (
     "ice_lens_depth",
     "water_level",
     "water_direction",
+    # vertical profiles (index 0 = top of the firn / lake / lid)
+    "firn_temperature",
+    "rho",
+    "Sfrac",
     "Lfrac",
+    "saturation",
+    "lake_temperature",
+    "lid_temperature",
 )
 output_filepath = "output/idealized_output.nc"
-output_grid_size = 20
+output_grid_size = vertical_points_firn  # save firn profiles at native resolution
 output_timestep = 1  # days
 dump_data = True
 dump_filepath = "output/idealized_dump.nc"

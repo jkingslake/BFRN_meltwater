@@ -31,6 +31,7 @@ python -m venv .venv
 .venv/bin/pip install "git+https://github.com/monarchs-ice/monarchs.git@7b5e728"
 .venv/bin/monarchs -i model_setup.py   # ~3.5 min on 4 cores incl. Numba compile
 .venv/bin/python plot_results.py       # -> idealized_results.png
+.venv/bin/python plot_profiles.py      # -> profiles_*.png (vertical profiles)
 ```
 
 Install from GitHub `main` (pinned above), not PyPI. The PyPI release
@@ -57,6 +58,52 @@ met forcing.
 - **Net surface-height change:** about −3 m upslope (melt that drained away)
   and up to +3 m in the basin (ponded or refrozen water). This is the
   redistribution that, combined with BFRNs, would change grounding-line flux.
+
+## Vertical profiles
+
+`plot_profiles.py` plots profiles at four points along the centre line (row 7):
+upslope (col 2), mid-slope (col 6), basin centre (col 10) and downslope
+(col 13). The y-axis is elevation above the column base, so you can see the
+firn surface drop and the lake and lid build on top. For this, `model_setup.py`
+saves the firn profiles at native resolution (200 layers, about 0.2 m each).
+That makes `output/idealized_output.nc` about 190 MB.
+
+- `profiles_full_column.png` / `profiles_near_surface.png`: snapshots on
+  days 0, 5, 15, 30, 50, 65, 80 and 100 of temperature (firn + lake + lid),
+  bulk density, liquid water fraction and air (pore) fraction.
+- `profiles_depth_time.png`: depth–time sections of temperature through
+  firn + lake + lid, and of liquid water in the top 2 m of firn.
+
+![depth-time](profiles_depth_time.png)
+
+What the profiles show:
+
+- **The lakes sit on firn that stays dry and unsaturated.** Liquid water stays
+  in the top firn layer (about 0.2 m), which holds about 0.1 liquid fraction
+  and almost no air. Below it, the air fraction keeps its initial profile
+  (about 0.1 near the surface, falling to 0.02 at depth). The ponded water does
+  not percolate deeper. Densification is off, so the firn surface drops because
+  the top of the firn melts, not because it compacts.
+- **The lakes are above freezing during the warm period.** The well-mixed lake
+  core reaches +3 to +4 °C, with 0 °C at the lake surface and bed. After day
+  50 it cools to about +0.3 °C, and a lid grows down from the surface (about
+  1 m by day 100).
+- **Heat goes down into the firn under lakes.** The lake bed is held at 0 °C,
+  and warming spreads about 5–8 m into the firn by day 50. Because the lake
+  and lid insulate the firn, that warming keeps spreading downward through the
+  cold period.
+- **Upslope (col 2) behaves differently.** Its pond is thin (about 0.3 m) and
+  freezes through by about day 80. The lid then becomes part of the firn
+  column, so the firn surface jumps up by about 0.8 m and the old wet layer is
+  buried about 0.8 m down. The newly exposed surface then cools to −40 °C
+  under the very low cold-period LW (100 W m⁻²).
+- **Caveat:** the buried wet layer upslope stays liquid (fraction about 0.1)
+  through day 100, even though the firn around it is below 0 °C. That may be a
+  MONARCHS limitation when a lid is converted to firn, and is worth checking
+  with the developers.
+- **Caveat:** in the first ~30 days, lake levels jump around from day to day.
+  This is probably because lateral water moves once per day
+  (`lateral_timestep` = 1 day), not a physical signal.
 
 ## Next steps / caveats
 
