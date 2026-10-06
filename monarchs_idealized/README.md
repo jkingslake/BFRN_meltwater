@@ -81,9 +81,9 @@ What the profiles show:
 - **The lakes sit on firn that stays dry and unsaturated.** Liquid water stays
   in the top firn layer (about 0.2 m), which holds about 0.1 liquid fraction
   and almost no air. Below it, the air fraction keeps its initial profile
-  (about 0.1 near the surface, falling to 0.02 at depth). The ponded water does
-  not percolate deeper. Densification is off, so the firn surface drops because
-  the top of the firn melts, not because it compacts.
+  (about 0.1 near the surface, falling to 0.02 at depth). Densification is off,
+  so the firn surface drops because the top of the firn melts, not because it
+  compacts. See "Where the water is" below for why the water doesn't go deeper.
 - **The lakes are above freezing during the warm period.** The well-mixed lake
   core reaches +3 to +4 °C, with 0 °C at the lake surface and bed. After day
   50 it cools to about +0.3 °C, and a lid grows down from the surface (about
@@ -104,6 +104,54 @@ What the profiles show:
 - **Caveat:** in the first ~30 days, lake levels jump around from day to day.
   This is probably because lateral water moves once per day
   (`lateral_timestep` = 1 day), not a physical signal.
+
+## Where the water is: lake vs. firn
+
+MONARCHS stores each column as three separate parts:
+
+- **Lid:** solid ice. It has only a thickness and a temperature profile.
+- **Lake:** liquid water. It has only a thickness and a temperature profile,
+  so it is 100 % water by definition. No variable says "water fraction = 1".
+- **Firn:** 200 layers, each with an ice fraction (`Sfrac`) and a liquid
+  fraction (`Lfrac`). The rest of each layer is air.
+
+So `Lfrac` (the "liquid water fraction" in the plots above) is firn pore water
+only. It can never exceed the pore space, which is about 10–13 % here.
+
+`plot_single_time.py <day>` stitches the three parts into one
+ice / water / air column at a single time, for the same four locations:
+
+![day 5](profiles_day005.png)
+
+`profiles_day005.png` shows the lakes just after they form, and
+`profiles_day030.png` shows them mid-season.
+
+How the lakes form and why the firn under them stays dry, from
+`physics/timestep.py` and `physics/firn/percolation.py`:
+
+1. **Before any lake exists:** meltwater percolates and refreezes. Refreezing
+   raises the ice density of the top ~0.2–0.4 m from about 805 to about
+   850 kg m⁻³.
+2. **A lens forms:** once a layer's ice density passes pore close-off
+   (`pore_closure = 830`), it is flagged as an impermeable ice lens.
+3. **Water ponds:** water fills the pores above the lens up to the surface,
+   and the excess becomes lake depth (`exposed_water = True`).
+4. **Percolation stops:** from then on, `firn_column` (which includes
+   percolation) is no longer called for that cell. The firn under a lake only
+   conducts heat, with its top held at 0 °C, and refreezes any liquid it
+   already holds. The lake melts the firn top downward, and that meltwater
+   goes straight into the lake.
+
+So the firn under a lake stays dry because percolation is switched off once
+there is exposed water, not because a lens physically seals it. The lens flag
+is "sticky": by day 30 the current top layer (fresh firn exposed by lake-bed
+melting) has an ice density of only about 825 kg m⁻³, but `ice_lens_depth`
+is still 0.
+
+The choice `rho_sfc = 800` matters here. It starts the surface just below the
+830 threshold, so a little refreezing seals it and lakes form within days.
+A lower surface density would let more meltwater percolate and refreeze in
+the firn before ponding.
 
 ## Next steps / caveats
 
