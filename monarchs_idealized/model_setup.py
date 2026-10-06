@@ -56,7 +56,7 @@ firn_depth = (
 
 rho_init = "default"
 T_init = "default"
-rho_sfc = 500
+rho_sfc = 800  # dense, melt-affected firn (~2.5 m pore space) so moderate melt can saturate it
 firn_max_height = 100
 firn_min_height = 30
 max_height_handler = "filter"
@@ -64,7 +64,13 @@ min_height_handler = "extend"
 
 """
 Met forcing: spatially uniform, constant warm period then cold period.
+(The MONARCHS example cases use SW = LW = 800 W m^-2 in the warm period,
+which melts ~15 m of firn and floods the whole domain; these are milder.)
 """
+warm_SW, cold_SW = 500, 100  # [W m^-2]
+warm_LW, cold_LW = 350, 100  # [W m^-2]
+warm_T, cold_T = 272, 250  # [K]
+warm_Td, cold_Td = 268, 240  # [K]
 nt = num_days * t_steps_per_day
 warm = warm_days * t_steps_per_day
 cold = cold_days * t_steps_per_day
@@ -75,10 +81,10 @@ def warm_cold(warm_val, cold_val):
 
 
 met_data = {
-    "LW_down": warm_cold(800, 100),  # [W m^-2]
-    "SW_down": warm_cold(800, 100),  # [W m^-2]
-    "temperature": warm_cold(267, 250),  # [K]
-    "dew_point_temperature": warm_cold(265, 240),  # [K]
+    "LW_down": warm_cold(warm_LW, cold_LW),  # [W m^-2]
+    "SW_down": warm_cold(warm_SW, cold_SW),  # [W m^-2]
+    "temperature": warm_cold(warm_T, cold_T),  # [K]
+    "dew_point_temperature": warm_cold(warm_Td, cold_Td),  # [K]
     "surf_pressure": 1000 * np.ones(nt),  # [hPa]
     "wind": 5 * np.ones(nt),  # [m s^-1]
     "snowfall": np.zeros(nt),  # [m s^-1]

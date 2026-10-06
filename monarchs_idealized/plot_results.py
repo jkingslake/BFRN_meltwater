@@ -25,9 +25,9 @@ nt = firn_depth.shape[0]
 days = np.arange(nt)
 surface = firn_depth + lake_depth + lid_depth
 
-# Which time is the lake extent largest?
+# Time of peak total lake volume
 lake_area = (lake_depth > 0.01).sum(axis=(1, 2))
-i_peak = int(np.argmax(lake_area)) if lake_area.max() > 0 else nt - 1
+i_peak = int(np.argmax(lake_depth.sum(axis=(1, 2))))
 
 fig, axes = plt.subplots(2, 3, figsize=(14, 8), constrained_layout=True)
 
@@ -38,7 +38,7 @@ fig.colorbar(im, ax=ax)
 
 ax = axes[0, 1]
 im = ax.imshow(lake_depth[i_peak], cmap="Blues")
-ax.set_title(f"Lake depth, day {i_peak} (max extent) [m]")
+ax.set_title(f"Lake depth, day {i_peak} (peak volume) [m]")
 fig.colorbar(im, ax=ax)
 
 ax = axes[0, 2]
@@ -71,4 +71,4 @@ ax.legend()
 ax.set_title("Centre-line profile")
 
 fig.savefig("idealized_results.png", dpi=120)
-print(f"Saved idealized_results.png ({nt} daily outputs, peak lake extent day {i_peak}: {lake_area[i_peak]} cells)")
+print(f"Saved idealized_results.png ({nt} daily outputs, peak lake volume day {i_peak}: {lake_area[i_peak]} cells)")
