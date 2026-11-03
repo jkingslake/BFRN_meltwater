@@ -10,7 +10,7 @@ a step-by-step derivation with diagrams and a narrated explainer video.
 
 | | |
 |---|---|
-| **Derivation (start here)** | [`derivation.md`](derivation.md): physics → master equation → limits → relaxation spectrum → numerics → verification, with diagrams at every step |
+| **Derivation (start here)** | [`derivation.md`](derivation.md): physics → master equation → limits → relaxation spectrum → numerics → verification, with diagrams at every step. Also as a PDF: [`derivation.pdf`](derivation.pdf) (rebuild with `python make_pdf.py`) |
 | **Explainer video** | [`video/ice_shelf_flexure_explainer.mp4`](video/ice_shelf_flexure_explainer.mp4): Manim animation with a British-English voice-over and subtitles ([narration script](video/narration_script.md)) |
 | **Model** | [`viscoelastic_beam.py`](viscoelastic_beam.py): one file, NumPy and SciPy only |
 | **Worked examples** | [`run_examples.py`](run_examples.py): writes the result figures in `figures/` |
