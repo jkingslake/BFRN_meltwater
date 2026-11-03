@@ -464,9 +464,11 @@ run with `python -m pytest -q`) checks the model against exact solutions:
   shape each other.
 * **Variable thickness.** This already works: pass `H` as an array. Both $D$
   and $\Lambda$ scale as $H^3$, so $\tau$ is unchanged.
-* **3-D lakes.** For a circular lake the same physics gives a plate equation in
-  polar coordinates, with Bessel-function solutions. The ring of tension
-  survives, with similar magnitudes.
+* **Lakes in map view.** This is implemented in
+  [`viscoelastic_plate.py`](viscoelastic_plate.py): the same physics with
+  $\partial^4/\partial x^4 \to \nabla^4$ gives a viscoelastic plate. A round
+  lake sinks less than a long trough at first, and the ring of tension survives.
+  See Part 3 of [`flexure_model_tutorial.ipynb`](flexure_model_tutorial.ipynb).
 * **Nonlinear (Glen's law) creep and depth-varying temperature.** Here
   $\eta$ depends on stress and depth, so $\Lambda$ becomes a function of the
   state. The moment update becomes a local nonlinear update; the solve stays

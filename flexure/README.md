@@ -12,10 +12,12 @@ a step-by-step derivation with diagrams and a narrated explainer video.
 |---|---|
 | **Derivation (start here)** | [`derivation.md`](derivation.md): physics → master equation → limits → relaxation spectrum → numerics → verification, with diagrams at every step. Also as a PDF: [`derivation.pdf`](derivation.pdf) (rebuild with `python make_pdf.py`) |
 | **Explainer video** | [`video/ice_shelf_flexure_explainer.mp4`](video/ice_shelf_flexure_explainer.mp4): Manim animation with a British-English voice-over and subtitles ([narration script](video/narration_script.md)) |
-| **Model** | [`viscoelastic_beam.py`](viscoelastic_beam.py): one file, NumPy and SciPy only |
+| **Tutorial notebook** | [`flexure_model_tutorial.ipynb`](flexure_model_tutorial.ipynb): how to use the model, every verification test from the derivation, the 2-D (map-view) plate extension including a real fill-spill-merge lake map, and a study of computation time |
+| **Model (1-D)** | [`viscoelastic_beam.py`](viscoelastic_beam.py): one file, NumPy and SciPy only. [`fast_beam.py`](fast_beam.py): the same time loop using banded LAPACK or Numba (5–20× less overhead per step) |
+| **Model (2-D plate)** | [`viscoelastic_plate.py`](viscoelastic_plate.py): `SpectralPlate` (periodic, FFT, exact in time) and `FDPlate` (finite differences with clamped edges and a grounded-ice mask; sparse LU or preconditioned CG) |
 | **Worked examples** | [`run_examples.py`](run_examples.py): writes the result figures in `figures/` |
 | **Diagrams** | [`make_diagrams.py`](make_diagrams.py): writes the schematic figures in `figures/diagram_*.png` |
-| **Tests** | [`tests/test_viscoelastic_beam.py`](tests/test_viscoelastic_beam.py): checks against exact solutions |
+| **Tests** | [`tests/`](tests): 21 checks against exact solutions (beam: Hetényi, grounding line, free edge, Fourier modes, convergence; plate: Kelvin-function point load, beam limit, solver agreement, exact time integration, force balance) |
 
 ## The model in one equation
 
@@ -44,7 +46,7 @@ pip install numpy scipy matplotlib pytest
 cd flexure
 python viscoelastic_beam.py   # parameters and a timing demo
 python run_examples.py        # figures/*.png
-python -m pytest -q           # 12 verification tests
+python -m pytest -q           # 21 verification tests
 ```
 
 ```python
