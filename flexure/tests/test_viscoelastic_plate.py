@@ -77,9 +77,11 @@ def test_fd_matches_spectral_for_a_circular_lake():
     sp_ = SpectralPlate(n, n, dx, SHELF)
     rs = sp_.run(t, (Q, np.ones(t.size)))
     assert np.max(np.abs(rf.w - rs.w)) / np.abs(rs.w).max() < 2e-3
-    a = sp_.surface_stress(rs.w[0], rs.q[0])[0]
-    b = fd.surface_stress(rf.mu[0])[0]
-    assert np.max(np.abs(a - b)) / np.abs(a).max() < 5e-3
+    for i in (0, -1):                       # elastic and partly relaxed
+        a = sp_.surface_stress(rs.mu[i])
+        b = fd.surface_stress(rf.mu[i])
+        scale = np.abs(a[0]).max()
+        assert all(np.max(np.abs(u - v)) / scale < 5e-3 for u, v in zip(a, b))
 
 
 def test_fd_force_balance_holds_exactly():
@@ -94,6 +96,41 @@ def test_fd_force_balance_holds_exactly():
         r = fd.force_residual(res.w[i], res.mu[i], res.q[i])
         assert np.max(np.abs(r)) < 1e-8 * Q.max()
     assert np.all(res.w[:, fixed] == 0)
+
+
+def test_moment_tensor_has_the_right_poisson_ratios():
+    """Elastically M = D[(1-nu) k + nu tr(k) I] with k = grad grad w; in the
+    viscous limit M = Lambda[(1-nu_v) k' + nu_v tr(k') I] with k' the rate."""
+    n, dx = 128, 100.0
+    x = (np.arange(n) - n / 2) * dx
+    X, Y = np.meshgrid(x, x)
+    depth = 3 * np.exp(-((X / 2000) ** 2 + (Y / 1200) ** 2))   # elliptical: anisotropic bending
+
+    def curvatures(p, f):
+        fh = p.fft(f)
+        return p.ifft(-p.KX**2 * fh), p.ifft(-p.KY**2 * fh), p.ifft(-p.KX * p.KY * fh)
+
+    def plate_law(R, nu, k):
+        tr = k[0] + k[1]
+        return R * ((1 - nu) * k[0] + nu * tr), R * ((1 - nu) * k[1] + nu * tr), R * (1 - nu) * k[2]
+
+    # elastic (t = 0+)
+    p = SpectralPlate(n, n, dx, SHELF)
+    Q = SHELF.lake_load(depth)
+    r = p.run([0.0], (Q, [1.0]))
+    M_model = [s_ * SHELF.H**2 / 6 for s_ in p.surface_stress(r.mu[0])]
+    M_law = plate_law(SHELF.D, SHELF.nu, curvatures(p, r.w[0]))
+    assert all(np.abs(a - b).max() / np.abs(M_law[0]).max() < 1e-10 for a, b in zip(M_model, M_law))
+    # viscous limit (Maxwell times of minutes)
+    sv = IceShelf(E=1e15, eta=1e14)
+    pv = SpectralPlate(n, n, dx, sv)
+    Qv = sv.lake_load(depth)
+    tq = np.array([0, 2 * DAY, 2 * DAY + 60.0])
+    rv = pv.run(tq, (Qv, np.ones(3)))
+    wdot = (rv.w[2] - rv.w[1]) / 60.0
+    M_model = [s_ * sv.H**2 / 6 for s_ in pv.surface_stress(0.5 * (rv.mu[1] + rv.mu[2]))]
+    M_law = plate_law(sv.Lam, sv.nu_v, curvatures(pv, wdot))
+    assert all(np.abs(a - b).max() / np.abs(M_law[0]).max() < 1e-4 for a, b in zip(M_model, M_law))
 
 
 def test_cg_and_lu_agree():

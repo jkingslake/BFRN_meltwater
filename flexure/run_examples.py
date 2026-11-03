@@ -18,14 +18,15 @@ import numpy as np
 import plotstyle as ps
 from viscoelastic_beam import (
     SECONDS_PER_DAY as DAY, IceShelf, ViscoelasticBeam, fill_hold_drain,
-    hetenyi_strip, parabolic_lake, relaxation_time, spectral_step_response)
+    hetenyi_strip, modal_step_response, parabolic_lake, relaxation_time, relaxation_times,
+    spectral_step_response)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 FIG = os.path.join(HERE, "figures")
 os.makedirs(FIG, exist_ok=True)
 ps.apply()
 
-SHELF = IceShelf()             # H = 250 m, E = 1 GPa, eta = 1e14 Pa s
+SHELF = IceShelf()             # H = 250 m, E = 1 GPa, eta = 1e14 Pa s, nu = 0.3, nu_v = 0.5
 LAKE_HALF_WIDTH = 1500.0       # m
 LAKE_DEPTH = 4.0               # m
 
@@ -159,29 +160,32 @@ def example_fill_drain():
 # ---------------------------------------------------------------------------
 def example_relaxation():
     ell, tau = SHELF.ell, SHELF.tau
+    single = IceShelf(nu_v=SHELF.nu)            # equal Poisson ratios: one Maxwell time
     lam = np.logspace(-0.3, 2.3, 400) * ell
     kx = 2 * np.pi / lam
-    tk = relaxation_time(kx, SHELF)
-    fig, (a1, a2) = plt.subplots(1, 2, figsize=(10, 4.2))
-    a1.loglog(lam / ell, tk / tau, color=ps.VISCO)
-    a1.axhline(1, color=ps.MUTED, lw=0.8, ls="--")
+    slow, fast = relaxation_times(kx, SHELF)
+    fig, (a1, a2) = plt.subplots(1, 2, figsize=(10.5, 4.3))
+    a1.loglog(lam / ell, relaxation_time(kx, single) / tau, color=ps.MUTED, ls=":", lw=2,
+              label=r"one Maxwell time: $\tau\,[1 + (2\pi\ell/\lambda)^4]$")
+    a1.loglog(lam / ell, slow / tau, color=ps.VISCO, label="slow mode (most of the creep)")
+    a1.loglog(lam / ell, fast / tau, color=ps.ELASTIC, label="fast mode")
     a1.set_xlabel(r"wavelength / flexural length,  $\lambda/\ell$")
-    a1.set_ylabel(r"relaxation time / Maxwell time,  $\tau_\lambda/\tau$")
-    a1.set_title(r"Relaxation time of wavelength $\lambda$:  $\tau_\lambda = \tau\,[1 + (2\pi\ell/\lambda)^4]$")
-    a1.annotate("narrow features:\nheld up elastically\nfor a long time", (2.3, 700),
+    a1.set_ylabel(r"relaxation time / mean Maxwell time,  $\tau_\lambda/\tau$")
+    a1.set_title("Relaxation times of a wavelength $\\lambda$")
+    a1.legend(loc="upper right", fontsize=8.5)
+    a1.annotate("narrow features:\nheld up elastically\nfor a long time", (0.62, 4),
                 color=ps.INK2, fontsize=9)
-    a1.annotate("broad features:\nrelax in ~ one Maxwell time", (15, 2.5),
-                color=ps.INK2, fontsize=9)
+    a1.annotate("broad features: relax\nin a few days", (12, 1.6), color=ps.INK2, fontsize=9)
 
     t = np.linspace(0, 12, 300)
     for r, c in zip([20, 6, 3, 1.5], [ps.SEQ[1], ps.SEQ[4], ps.SEQ[7], ps.SEQ[9]]):
         k = 2 * np.pi / (r * ell)
-        el = 1 / (1 + (k * ell) ** 4)            # elastic amplitude / isostatic
-        amp = 1 + (el - 1) * np.exp(-t * tau / relaxation_time(k, SHELF))
-        a2.plot(t, amp, color=c, label=rf"$\lambda = {r:g}\,\ell$")
-    a2.set_xlabel(r"time / Maxwell time,  $t/\tau$")
+        a2.plot(t, modal_step_response(k, SHELF, t * tau), color=c, label=rf"$\lambda = {r:g}\,\ell$")
+        a2.plot(t, modal_step_response(k, single, t * tau), color=c, ls=":", lw=1.2)
+    a2.set_xlabel(r"time / mean Maxwell time,  $t/\tau$")
     a2.set_ylabel("amplitude / isostatic amplitude")
-    a2.set_title("Each wavelength jumps elastically, then creeps")
+    a2.set_title("Each wavelength jumps elastically, then creeps\n(dotted: one Maxwell time)",
+                 fontsize=11)
     a2.set_ylim(0, 1.05)
     a2.legend(loc="lower right")
     fig.tight_layout()
@@ -289,7 +293,9 @@ def example_verification():
 
 
 if __name__ == "__main__":
-    print(f"D = {SHELF.D:.3e} N m, ell = {SHELF.ell:.0f} m, tau = {SHELF.tau / DAY:.2f} days")
+    t1, t2 = SHELF.taus / DAY
+    print(f"D = {SHELF.D:.3e} N m, ell = {SHELF.ell:.0f} m, tau = {SHELF.tau / DAY:.2f} days "
+          f"(elements {t1:.2f} and {t2:.2f} days)")
     example_step_response()
     example_fill_drain()
     example_relaxation()

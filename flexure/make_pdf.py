@@ -141,7 +141,7 @@ def adapt(md: str) -> str:
 
     # unicode that the fonts lack
     md = (md.replace("✓", r"$\checkmark$").replace("m⁻³", "m$^{-3}$")
-            .replace("m⁻¹", "m$^{-1}$"))
+            .replace("m⁻¹", "m$^{-1}$").replace("′", "$'$").replace("½", r"$\tfrac12$"))
 
     # figures: proper captions, and fold the italic caption paragraph into the figure
     def fig(m):

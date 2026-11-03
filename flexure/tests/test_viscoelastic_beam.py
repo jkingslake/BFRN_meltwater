@@ -11,7 +11,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from viscoelastic_beam import (  # noqa: E402
     SECONDS_PER_DAY, IceShelf, ViscoelasticBeam, grounding_line_profile,
-    hetenyi_strip, parabolic_lake, relaxation_time, spectral_step_response)
+    hetenyi_strip, parabolic_lake, relaxation_time, relaxation_times, spectral_step_response)
 
 SHELF = IceShelf()
 DAY = SECONDS_PER_DAY
@@ -27,8 +27,12 @@ def test_parameters_are_sensible():
     assert 1e14 < SHELF.D < 1e16
     assert 400 < SHELF.ell < 1000
     assert 1 * DAY < SHELF.tau < 10 * DAY
-    # tau = 4 eta (1 - nu^2) / E
-    assert np.isclose(SHELF.tau, 4 * SHELF.eta * (1 - SHELF.nu**2) / SHELF.E)
+    # mean time tau = 4 eta (1 - nu^2) / E; element times for incompressible creep
+    E, eta, nu = SHELF.E, SHELF.eta, SHELF.nu
+    assert np.isclose(SHELF.tau, 4 * eta * (1 - nu**2) / E)
+    assert np.allclose(SHELF.taus, [6 * eta * (1 - nu) / E, 2 * eta * (1 + nu) / E])
+    # rigidity-weighted mean of the two element times is tau
+    assert np.isclose((SHELF.weights * SHELF.taus).sum(), SHELF.tau)
 
 
 def test_elastic_strip_load_matches_hetenyi():
@@ -129,5 +133,39 @@ def test_time_stepping_is_second_order():
 
 
 def test_relaxation_time_formula():
-    assert np.isclose(relaxation_time(0.0, SHELF), SHELF.tau)
-    assert np.isclose(relaxation_time(1 / SHELF.ell, SHELF), 2 * SHELF.tau)
+    single = IceShelf(nu_v=SHELF.nu)            # equal Poisson ratios: one Maxwell time
+    assert np.isclose(relaxation_time(0.0, single), single.tau)
+    assert np.isclose(relaxation_time(1 / single.ell, single), 2 * single.tau)
+    # incompressible creep: broad features relax with the two element times
+    assert np.allclose(relaxation_times(0.0, SHELF), SHELF.taus)
+
+
+def test_equal_poisson_ratios_reduce_to_single_maxwell_element():
+    """nu_v = nu must reproduce the one-relaxation-time model exactly:
+    each mode relaxes as exp(-t / (tau (1 + (k ell)^4)))."""
+    single = IceShelf(nu_v=SHELF.nu)
+    x = np.linspace(-25e3, 25e3, 2001)[:-1]
+    q = single.lake_load(smooth_lake(x))
+    t = np.linspace(0, 15, 61) * DAY
+    kx = 2 * np.pi * np.fft.rfftfreq(x.size, x[1] - x[0])
+    qh = np.fft.rfft(q)
+    A = single.D * kx**4 + single.k
+    tau_k = single.tau * (1 + (kx * single.ell) ** 4)
+    closed = np.fft.irfft(qh / single.k + (qh / A - qh / single.k) * np.exp(-t[:, None] / tau_k),
+                          n=x.size, axis=1)
+    exact = spectral_step_response(x, q, t, single)
+    assert np.max(np.abs(exact - closed)) / np.abs(closed).max() < 1e-12
+    res = ViscoelasticBeam(x, single).run(t, lambda _: q)
+    assert np.max(np.abs(res.w - closed)) / np.abs(closed).max() < 2e-3
+
+
+def test_two_poisson_ratios_change_stress_more_than_deflection():
+    """Incompressible creep barely changes w but does change the moments."""
+    x = np.linspace(-15e3, 15e3, 1501)
+    q = SHELF.lake_load(parabolic_lake(x, 0, 1500, 4.0))
+    t = np.linspace(0, 10, 201) * DAY
+    a = ViscoelasticBeam(x, SHELF).run(t, lambda _: q)
+    b = ViscoelasticBeam(x, IceShelf(nu_v=SHELF.nu)).run(t, lambda _: q)
+    dw = np.abs(a.w - b.w).max() / np.abs(b.w).max()
+    dM = np.abs(a.M - b.M).max() / np.abs(b.M).max()
+    assert dw < 0.01 and dM > dw

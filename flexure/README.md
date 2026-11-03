@@ -17,12 +17,12 @@ a step-by-step derivation with diagrams and a narrated explainer video.
 | **Model (2-D plate)** | [`viscoelastic_plate.py`](viscoelastic_plate.py): `SpectralPlate` (periodic, FFT, exact in time) and `FDPlate` (finite differences with clamped edges and a grounded-ice mask; sparse LU or preconditioned CG) |
 | **Worked examples** | [`run_examples.py`](run_examples.py): writes the result figures in `figures/` |
 | **Diagrams** | [`make_diagrams.py`](make_diagrams.py): writes the schematic figures in `figures/diagram_*.png` |
-| **Tests** | [`tests/`](tests): 21 checks against exact solutions (beam: Hetényi, grounding line, free edge, Fourier modes, convergence; plate: Kelvin-function point load, beam limit, solver agreement, exact time integration, force balance) |
+| **Tests** | [`tests/`](tests): 24 checks against exact solutions (beam: Hetényi, grounding line, free edge, Fourier modes, convergence; plate: Kelvin-function point load, beam limit, solver agreement, exact time integration, force balance) |
 
 ## The model in one equation
 
-The deflection $w(x,t)$ is positive downwards. Under a lake load
-$q = \rho_w g\,d(x,t)$ it obeys
+The deflection $w(x,t)$ is positive downwards. In its simplest form, with one
+relaxation time, it obeys this equation under a lake load $q = \rho_w g\,d(x,t)$:
 
 $$
 \Big(D\,\frac{\partial^4}{\partial x^4} + k\Big)\frac{\partial w}{\partial t}
@@ -30,11 +30,18 @@ $$
 \qquad D = \frac{EH^3}{12(1-\nu^2)},\quad k = \rho_{sw}g,\quad \tau = \frac{4\eta(1-\nu^2)}{E}.
 $$
 
+By default the model goes one step further. Ice is elastic with Poisson's ratio
+$\nu = 0.3$, but it creeps without changing volume, so the viscous part has
+$\nu_v = 0.5$ (`IceShelf.nu_v`). The bending moment then splits into an
+isotropic part and a deviatoric part, with relaxation times
+$\tau_1 = 6\eta(1-\nu)/E \approx 4.9$ days and $\tau_2 = 2\eta(1+\nu)/E \approx 3.0$ days.
+Setting `nu_v = nu` recovers the single-time equation above exactly. The split
+changes deflections by under 1% and stresses by up to ~20% (in map view).
+
 * **On loading, the response is elastic** ($D w'''' + kw = q$). The dip spreads
   over a few flexural lengths $\ell = (D/k)^{1/4}$, which is about 600 m here.
-* **Over a few Maxwell times $\tau$** (about 4 days here) the shelf relaxes
-  towards **local isostasy**, $w = q/k$.
-* **A feature of wavelength $\lambda$ relaxes on the timescale
+* **Over a few days** the shelf relaxes towards **local isostasy**, $w = q/k$.
+* **A feature of wavelength $\lambda$ relaxes on a timescale of roughly
   $\tau[1 + (2\pi\ell/\lambda)^4]$**, so narrow features relax slowest.
 * **Draining a lake that has sat for a while flips the stress.** The surface
   under the old lake goes into tension.
@@ -46,14 +53,14 @@ pip install numpy scipy matplotlib pytest
 cd flexure
 python viscoelastic_beam.py   # parameters and a timing demo
 python run_examples.py        # figures/*.png
-python -m pytest -q           # 21 verification tests
+python -m pytest -q           # 24 verification tests
 ```
 
 ```python
 import numpy as np
 from viscoelastic_beam import IceShelf, ViscoelasticBeam, parabolic_lake, SECONDS_PER_DAY
 
-shelf = IceShelf(H=250, E=1e9, eta=1e14)        # SI units
+shelf = IceShelf(H=250, E=1e9, eta=1e14)        # SI units; nu = 0.3, nu_v = 0.5
 x = np.linspace(0, 30e3, 3001)                  # grounding line at x = 0
 beam = ViscoelasticBeam(x, shelf, left="clamped", right="free")
 depth = parabolic_lake(x, centre=8e3, half_width=1.5e3, max_depth=4.0)

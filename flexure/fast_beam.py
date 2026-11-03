@@ -1,7 +1,8 @@
 """
 fast_beam.py: faster drop-in time loops for ``ViscoelasticBeam``.
 
-Same discretisation and the same answers as ``ViscoelasticBeam.run``, but the
+Same discretisation (both Maxwell elements) and the same answers as
+``ViscoelasticBeam.run``, but the
 per-step overhead is removed in two ways:
 
 * ``run_banded``  keeps everything in NumPy/SciPy.  The pentadiagonal matrix is
@@ -51,11 +52,12 @@ def _band_matvec(ab, x, kl, ku):
 
 
 def _setup(beam, dt):
-    """Step matrix S = L* (c D) L and system matrix A = S + k I, with clamped
-    nodes turned into identity rows/columns (their right-hand side is zeroed)."""
-    a = dt / beam.tau
+    """Step matrix S = L* (c1 D1 + c2 D2) L and system matrix A = S + k I, with
+    clamped nodes turned into identity rows/columns (their right-hand side is
+    zeroed).  c and a have shape (2, n): one row per Maxwell element."""
+    a = dt / beam.taup
     c = 1.0 / (1.0 + 0.5 * a)
-    S = (beam.Lstar @ sp.diags(c * beam.D) @ beam.L).tocsr()
+    S = (beam.Lstar @ sp.diags((c * beam.Dp).sum(axis=0)) @ beam.L).tocsr()
     act = beam.active.astype(float)
     P = sp.diags(act)
     A = (P @ S @ P + sp.diags(beam.k * act + (1.0 - act))).tocsr()
@@ -77,19 +79,20 @@ def run_banded(beam, t, Q, f):
     assert info == 0
     Sb, Lb, Lsb = _bands(S, 2, 2), _bands(beam.L, 1, 1), _bands(beam.Lstar, 1, 1)
     act = beam.active.astype(float)
-    D = beam.D
     W = np.empty((t.size, beam.n))
     Mm = np.empty_like(W)
     w, M = beam.elastic(Q * f[0])
+    Mp = beam.split_moment(M)                       # the two Maxwell elements
     W[0], Mm[0] = w, M
-    g = c * (1.0 - 0.5 * a)
+    h = 1.0 - 0.5 * a
+    g = c * h
     for i in range(1, t.size):
-        rhs = Q * f[i] + _band_matvec(Sb, w, 2, 2) - _band_matvec(Lsb, g * M, 1, 1)
+        rhs = Q * f[i] + _band_matvec(Sb, w, 2, 2) - _band_matvec(Lsb, (g * Mp).sum(axis=0), 1, 1)
         rhs *= act
         w1, info = lapack.dgbtrs(lub, kl, ku, rhs, piv)
-        M = c * ((1.0 - 0.5 * a) * M + D * _band_matvec(Lb, w1 - w, 1, 1))
+        Mp = c * (h * Mp + beam.Dp * _band_matvec(Lb, w1 - w, 1, 1)[None, :])
         w = w1
-        W[i], Mm[i] = w, M
+        W[i], Mm[i] = w, Mp.sum(axis=0)
     return W, Mm
 
 
@@ -107,20 +110,23 @@ def _rhs_at(j, n, qj, Sb, Lsb, w, gM):
     return s
 
 
-def _loop(Q, f, w0, M0, Sb, Lb, Lsb, act, lo1, lo2, u0, u1, u2, D, c, a, store_every):
-    """The whole time loop.  Interior loops have no branches, so the compiler
-    can vectorise them; the four edge nodes use the bounds-checked stencil."""
+def _loop(Q, f, w0, M10, M20, Sb, Lb, Lsb, act, lo1, lo2, u0, u1, u2, D1, D2,
+          c1, a1, c2, a2, store_every):
+    """The whole time loop for the two Maxwell elements M1, M2.  Interior loops
+    have no branches, so the compiler can vectorise them; the four edge nodes
+    use the bounds-checked stencil."""
     n = w0.size
     nt = f.size
     nout = (nt - 1) // store_every + 1
     W = np.empty((nout, n))
     Mo = np.empty((nout, n))
     w = w0.copy()
-    M = M0.copy()
+    M1 = M10.copy()
+    M2 = M20.copy()
     W[0] = w
-    Mo[0] = M
-    g = c * (1.0 - 0.5 * a)
-    h = 1.0 - 0.5 * a
+    Mo[0] = M1 + M2
+    h1, h2 = 1.0 - 0.5 * a1, 1.0 - 0.5 * a2
+    g1, g2 = c1 * h1, c2 * h2
     inv_u0 = 1.0 / u0
     gM = np.empty(n)
     rhs = np.empty(n)
@@ -131,7 +137,7 @@ def _loop(Q, f, w0, M0, Sb, Lb, Lsb, act, lo1, lo2, u0, u1, u2, D, c, a, store_e
     for it in range(1, nt):
         fi = f[it]
         for j in range(n):
-            gM[j] = g * M[j]
+            gM[j] = g1 * M1[j] + g2 * M2[j]
         # rhs = q + S w - L* (g M)
         for j in range(2, n - 2):
             rhs[j] = (Q[j] * fi + Sb[0, j + 2] * w[j + 2] + Sb[1, j + 1] * w[j + 1]
@@ -151,19 +157,25 @@ def _loop(Q, f, w0, M0, Sb, Lb, Lsb, act, lo1, lo2, u0, u1, u2, D, c, a, store_e
         w1[n - 2] = (y[n - 2] - u1[n - 2] * w1[n - 1]) * inv_u0[n - 2]
         for j in range(n - 3, -1, -1):
             w1[j] = (y[j] - u1[j] * w1[j + 1] - u2[j] * w1[j + 2]) * inv_u0[j]
-        # Maxwell update  M <- c [(1 - a/2) M + D L (w1 - w)]
+        # Maxwell updates  Mi <- ci [(1 - ai/2) Mi + Di L (w1 - w)]
         for j in range(n):
             dw[j] = w1[j] - w[j]
-        M[0] = c * (h * M[0] + D[0] * (Lb[1, 0] * dw[0] + Lb[0, 1] * dw[1]))
+        dk = Lb[1, 0] * dw[0] + Lb[0, 1] * dw[1]
+        M1[0] = c1 * (h1 * M1[0] + D1[0] * dk)
+        M2[0] = c2 * (h2 * M2[0] + D2[0] * dk)
         for j in range(1, n - 1):
-            M[j] = c * (h * M[j] + D[j] * (Lb[2, j - 1] * dw[j - 1] + Lb[1, j] * dw[j]
-                                           + Lb[0, j + 1] * dw[j + 1]))
-        M[n - 1] = c * (h * M[n - 1] + D[n - 1] * (Lb[2, n - 2] * dw[n - 2] + Lb[1, n - 1] * dw[n - 1]))
+            dk = Lb[2, j - 1] * dw[j - 1] + Lb[1, j] * dw[j] + Lb[0, j + 1] * dw[j + 1]
+            M1[j] = c1 * (h1 * M1[j] + D1[j] * dk)
+            M2[j] = c2 * (h2 * M2[j] + D2[j] * dk)
+        dk = Lb[2, n - 2] * dw[n - 2] + Lb[1, n - 1] * dw[n - 1]
+        M1[n - 1] = c1 * (h1 * M1[n - 1] + D1[n - 1] * dk)
+        M2[n - 1] = c2 * (h2 * M2[n - 1] + D2[n - 1] * dk)
         for j in range(n):
             w[j] = w1[j]
         if it % store_every == 0:
             W[k] = w
-            Mo[k] = M
+            for j in range(n):
+                Mo[k, j] = M1[j] + M2[j]
             k += 1
     return W, Mo
 
@@ -217,11 +229,13 @@ def run_numba(beam, t, Q, f, store_every=1):
     if not np.allclose(np.diff(t), dt):
         raise ValueError("run_numba needs a constant time step")
     S, A, c, a = _setup(beam, dt)
-    if not np.allclose(beam.tau, beam.tau[0]):
-        raise ValueError("run_numba assumes a uniform Maxwell time")
-    c, a = float(np.ravel(c)[0]), float(np.ravel(a)[0])
+    if not np.allclose(beam.taup, beam.taup[:, :1]):
+        raise ValueError("run_numba assumes uniform relaxation times")
     lo1, lo2, u0, u1, u2 = _penta_lu(_bands(A, 2, 2))
     w0, M0 = beam.elastic(Q * f[0])
-    return _loop(np.asarray(Q, float), np.asarray(f, float), w0, M0, _bands(S, 2, 2),
-                 _bands(beam.L, 1, 1), _bands(beam.Lstar, 1, 1), beam.active.astype(float),
-                 lo1, lo2, u0, u1, u2, beam.D.astype(float), c, a, store_every)
+    Mp0 = beam.split_moment(M0)
+    return _loop(np.asarray(Q, float), np.asarray(f, float), w0, Mp0[0].copy(), Mp0[1].copy(),
+                 _bands(S, 2, 2), _bands(beam.L, 1, 1), _bands(beam.Lstar, 1, 1),
+                 beam.active.astype(float), lo1, lo2, u0, u1, u2,
+                 np.ascontiguousarray(beam.Dp[0]), np.ascontiguousarray(beam.Dp[1]),
+                 float(c[0, 0]), float(a[0, 0]), float(c[1, 0]), float(a[1, 0]), store_every)

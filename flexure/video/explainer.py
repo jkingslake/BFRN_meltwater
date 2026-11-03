@@ -48,7 +48,10 @@ config.background_color = BG
 Text.set_default(font="Inter", color=INK)
 MathTex.set_default(color=INK)
 
-SHELF = IceShelf()
+# The video explains the one-relaxation-time model (elastic and viscous Poisson
+# ratios equal), so its simulations use that model.  The library default now has
+# incompressible creep (nu_v = 1/2) and two relaxation times; see derivation.md.
+SHELF = IceShelf(nu_v=0.3)
 RHO = SHELF.rho_i / SHELF.rho_sw
 
 

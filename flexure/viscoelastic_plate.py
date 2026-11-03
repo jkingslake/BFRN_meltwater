@@ -4,27 +4,31 @@ viscoelastic_plate.py
 
 The map-plane (x, y) extension of ``viscoelastic_beam.py``: a thin Maxwell
 viscoelastic *plate* floating on a hydrostatic foundation.  The beam's
-d^4/dx^4 becomes the biharmonic operator and everything else carries over:
+d^4/dx^4 becomes the biharmonic operator lap^2 = (d_xx + d_yy)^2.
 
-    (D lap^2 + k) dw/dt = dq/dt + (q - k w) / tau,       lap^2 = (d_xx + d_yy)^2
+Ice is elastic with Poisson's ratio nu (~0.3) but creeps incompressibly
+(viscous Poisson's ratio nu_v = 1/2).  The plate's moment tensor therefore
+splits into an isotropic part and a deviatoric part, each a Maxwell element
+with its own relaxation time (tau_1, tau_2; see ``IceShelf.taus``).  Each part
+is carried by a scalar "moment potential" (units N m^2):
 
-Moments come from a scalar "moment potential" mu (units N m^2), which obeys
-the same Maxwell law as the beam's moment and makes the bookkeeping trivial:
+    dmu_i/dt = D_i dw/dt - mu_i / tau_i      (local updates, no derivatives)
+    lap^2 (mu_1 + mu_2) + k w = q            (force balance)
+    M = lap(mu_1) I + 2 grad grad mu_2 - lap(mu_2) I
 
-    dmu/dt = D dw/dt - mu / tau          (local update, no derivatives)
-    lap^2 mu + k w = q                   (force balance)
-    M_xx = mu_xx + nu mu_yy,  M_yy = mu_yy + nu mu_xx,  M_xy = (1 - nu) mu_xy
-
-Elastically mu = D w, which gives the usual plate moments.  (Assumption, as in
-the beam model: the viscous part of the Maxwell law has the same tensor
-structure as the elastic part, so the plate keeps a single relaxation time.)
+with D_1 = D (1 + nu)/2 and D_2 = D (1 - nu)/2.  Elastically mu_i = D_i w,
+which gives the textbook plate moments D[(1 - nu) w_ij + nu lap(w) d_ij]; in
+the viscous limit the moments become Lambda[(1 - nu_v) k_ij + nu_v tr(k) d_ij]
+with k the curvature *rate* - for nu_v = 1/2 exactly the viscous plate of
+MacAyeal et al. (2021) and Bezu et al. (2025).  With nu_v = nu the two
+relaxation times coincide and the model has a single relaxation time.
 
 Two solvers
 -----------
 SpectralPlate   periodic domain, FFTs.  Each Fourier mode is integrated
-                *exactly* in time for loads that vary linearly between the
-                given times, so time steps are needed only where the load
-                history has corners.  Fastest by far.
+                *exactly* in time (a 2x2 matrix exponential) for loads that
+                vary linearly between the given times, so time steps are
+                needed only where the load history has corners.
 FDPlate         finite differences (13-point biharmonic) on a rectangle with
                 clamped or periodic edges, plus an optional mask of fixed
                 (grounded) nodes for irregular grounding lines.  Crank-Nicolson
@@ -33,7 +37,8 @@ FDPlate         finite differences (13-point biharmonic) on a rectangle with
                 a fast sine transform (rectangles).
 
 Conventions as in the beam: w positive down, q positive down, sigma > 0 is
-tension at the upper surface.  Arrays are indexed [y, x].
+tension at the upper surface.  Arrays are indexed [y, x]; the two moment
+potentials are stacked along a leading axis of length 2.
 """
 from __future__ import annotations
 
@@ -45,7 +50,7 @@ import scipy.fft as sfft
 import scipy.sparse as sp
 from scipy.sparse.linalg import LinearOperator, cg, splu
 
-from viscoelastic_beam import IceShelf, SECONDS_PER_DAY  # noqa: F401  (re-exported)
+from viscoelastic_beam import IceShelf, SECONDS_PER_DAY, expm_2x2, maxwell_modes  # noqa: F401
 
 
 @dataclass
@@ -53,7 +58,13 @@ class Result2D:
     t: np.ndarray            # output times [s]
     w: np.ndarray            # deflection, shape (nt, ny, nx) [m]
     q: np.ndarray            # load at the output times [Pa]
-    mu: np.ndarray | None    # moment potential (FD solver only) [N m^2]
+    mu: np.ndarray | None    # moment potentials, shape (nt, 2, ny, nx) [N m^2]
+
+
+def moments_from_potentials(m1_xx, m1_yy, m2_xx, m2_yy, m2_xy):
+    """M = lap(mu_1) I + 2 grad grad mu_2 - lap(mu_2) I, from second derivatives."""
+    lap1 = m1_xx + m1_yy
+    return lap1 + m2_xx - m2_yy, lap1 + m2_yy - m2_xx, 2.0 * m2_xy
 
 
 def principal_stresses(sxx, syy, sxy):
@@ -69,12 +80,12 @@ def principal_stresses(sxx, syy, sxy):
 class SpectralPlate:
     """Maxwell plate on a periodic nx-by-ny grid, solved mode by mode.
 
-    For each Fourier mode (wavenumber magnitude K) the master equation is the
-    scalar ODE  A dW/dt = dQ/dt + (Q - k W)/tau  with  A = D K^4 + k.  If Q
-    varies linearly over a step (slope s) the exact update is
+    In each Fourier mode the two moment potentials obey the linear system
+    dmu/dt = (d/A) dq/dt - G mu  (see ``viscoelastic_beam.maxwell_modes``), and
+    the deflection follows from force balance, w = (q - K^4 (mu_1 + mu_2))/k.
+    For a load that varies linearly over a step (slope s) the exact update is
 
-        W1 = c0 + s dt / k + (W0 - c0) exp(-lam dt),
-        lam = k / (tau A),   c0 = (Q0 + s tau)/k - tau A s / k^2,
+        mu1 = E mu0 + B s,    E = exp(-G dt),   B = [int_0^dt exp(-G t') dt'] d / A,
 
     so the scheme is exact and unconditionally stable for any dt.
     """
@@ -87,16 +98,16 @@ class SpectralPlate:
         self.nx, self.ny = nx, ny
         self.dx, self.dy = dx, (dy if dy is not None else dx)
         self.dtype = np.dtype(dtype)
-        self.cdtype = np.result_type(self.dtype, np.complex64)
         self.workers = workers
         kx = 2 * np.pi * sfft.rfftfreq(nx, self.dx)
         ky = 2 * np.pi * sfft.fftfreq(ny, self.dy)
         self.KX, self.KY = np.meshgrid(kx, ky)               # shape (ny, nx//2 + 1)
-        K2 = self.KX**2 + self.KY**2
-        self.K4 = (K2**2).astype(self.dtype)
-        self.D, self.k, self.tau = float(self.shelf.D), self.shelf.k, float(self.shelf.tau)
-        self.A = (self.D * self.K4 + self.k).astype(self.dtype)
-        self.lam = (self.k / (self.tau * self.A)).astype(self.dtype)
+        self.K2 = self.KX**2 + self.KY**2
+        self.K4 = (self.K2**2).astype(self.dtype)
+        self.D, self.k = float(self.shelf.D), self.shelf.k
+        self.d, A64, self._G = maxwell_modes(self.K2**2, self.shelf)
+        self.A = A64.astype(self.dtype)
+        self._coef: dict[float, tuple] = {}
 
     # -- transforms --------------------------------------------------------
     def fft(self, a):
@@ -115,33 +126,38 @@ class SpectralPlate:
 
     # -- exact modal step ----------------------------------------------------
     def step_coefficients(self, dt):
-        """Real arrays (E, b0, b1) with  W1 = E W0 + b0 Q0 + b1 Q1  (exact for a
-        load linear in time over the step).  Cached per dt; built in float64
-        with cancellation-free formulas, then cast to the working precision."""
+        """Real arrays (E11, E12, E21, E22, B1, B2) with
+        mu_i(t + dt) = sum_j E_ij mu_j(t) + B_i s  for a load slope s.
+        Cached per dt; built in float64, then cast to the working precision."""
         key = float(dt)
-        cache = self.__dict__.setdefault("_coef", {})
-        if key not in cache:
-            A = self.D * self.K4.astype(np.float64) + self.k
-            x = self.k * dt / (self.tau * A)              # lam * dt
-            E = np.exp(-x)
-            phi = -np.expm1(-x) / x                       # (1 - E) / x
-            one_m_phi = np.where(x < 1e-4, x / 2 - x**2 / 6 + x**3 / 24, 1 - phi)
-            b1 = (one_m_phi + phi * self.k / A) / self.k  # weight of the new load
-            b0 = (1 - E) / self.k - b1                    # weight of the old load
-            cache[key] = tuple(a.astype(self.dtype) for a in (E, b0, b1))
-        return cache[key]
+        if key not in self._coef:
+            E, F = expm_2x2(self._G, dt)
+            dA = self.d[None, None, :] / (self.D * self.K2[..., None] ** 2 + self.k)
+            B = np.einsum("...ij,...j->...i", F, dA)
+            arrs = (E[..., 0, 0], E[..., 0, 1], E[..., 1, 0], E[..., 1, 1], B[..., 0], B[..., 1])
+            self._coef[key] = tuple(np.ascontiguousarray(a, dtype=self.dtype) for a in arrs)
+        return self._coef[key]
 
-    def step_hat(self, w_hat, q0_hat, q1_hat, dt):
-        """Advance the Fourier coefficients by dt (load linear in between).
+    def elastic_potentials(self, q_hat):
+        """Moment potentials of the elastic response, mu_i = D_i q_hat / A."""
+        return [q_hat * (di / self.A) for di in self.d]
 
-        Solving  A W' = Q' + (Q - k W)/tau  exactly for linear Q(t) gives
-        W1 = E W0 + b0 Q0 + b1 Q1  with  E = exp(-dt k / (tau A))."""
+    def deflection_hat(self, mu_hat, q_hat):
+        """Force balance:  w_hat = (q_hat - K^4 (mu1 + mu2)) / k."""
+        return (q_hat - self.K4 * (mu_hat[0] + mu_hat[1])) / self.k
+
+    def step_hat(self, mu_hat, q0_hat, q1_hat, dt):
+        """Advance the two potentials' Fourier coefficients by dt (load linear
+        in between).  ``mu_hat`` is a pair of arrays; returns the new pair."""
+        m1, m2 = mu_hat
         if dt == 0:  # instantaneous change of load: elastic jump
-            return w_hat + (q1_hat - q0_hat) / self.A
-        E, b0, b1 = self.step_coefficients(dt)
-        return E * w_hat + b0 * q0_hat + b1 * q1_hat
+            j1, j2 = self.elastic_potentials(q1_hat - q0_hat)
+            return [m1 + j1, m2 + j2]
+        E11, E12, E21, E22, B1, B2 = self.step_coefficients(dt)
+        s = (q1_hat - q0_hat) / dt
+        return [E11 * m1 + E12 * m2 + B1 * s, E21 * m1 + E22 * m2 + B2 * s]
 
-    def run(self, t: Sequence[float], load, w0=None, store: Sequence[int] | None = None):
+    def run(self, t: Sequence[float], load, store: Sequence[int] | None = None, store_mu=True):
         """Integrate through the times ``t`` (the load is linear in between).
 
         ``load`` may be
@@ -151,15 +167,21 @@ class SpectralPlate:
             function or an array of length nt - the fastest option, since Q
             is transformed only once.
         ``store`` lists the time indices to return (default: all).  Only those
-        need an inverse FFT.  Starts from rest with an elastic response to
-        q(t[0]) unless w0 is given.
+        need inverse FFTs.  The plate starts from rest with an elastic response
+        to q(t[0]).  With ``store_mu`` the moment potentials are returned too
+        (needed for stresses).
         """
         t = np.asarray(t, dtype=float)
         store = list(range(t.size)) if store is None else list(store)
         if isinstance(load, tuple):
-            return self._run_separable(t, *load, w0=w0, store=store)
+            Q, f = load
+            fv = np.array([f(tt) for tt in t]) if callable(f) else np.asarray(f, float)
+            Q = np.asarray(Q, dtype=self.dtype)
+            Q_hat = self.fft(Q)
+            q_hat_at = lambda i: Q_hat * fv[i]
+            q_at = lambda i: Q * fv[i]
         elif callable(load):
-            q_at = lambda i: load(t[i])
+            q_at = lambda i: np.asarray(load(t[i]), dtype=self.dtype)
             q_hat_at = lambda i: self.fft(q_at(i))
         else:
             load = np.asarray(load)
@@ -168,63 +190,32 @@ class SpectralPlate:
 
         W = np.empty((len(store), self.ny, self.nx), dtype=self.dtype)
         Qs = np.empty_like(W)
+        MU = np.empty((len(store), 2, self.ny, self.nx), dtype=self.dtype) if store_mu else None
         q_hat = q_hat_at(0)
-        w_hat = q_hat / self.A if w0 is None else self.fft(w0)
+        mu_hat = self.elastic_potentials(q_hat)
         j = 0
         for i in range(t.size):
             if i > 0:
                 q1_hat = q_hat_at(i)
-                w_hat = self.step_hat(w_hat, q_hat, q1_hat, t[i] - t[i - 1])
+                mu_hat = self.step_hat(mu_hat, q_hat, q1_hat, t[i] - t[i - 1])
                 q_hat = q1_hat
             if j < len(store) and store[j] == i:
-                W[j] = self.ifft(w_hat)
+                W[j] = self.ifft(self.deflection_hat(mu_hat, q_hat))
                 Qs[j] = q_at(i)
+                if store_mu:
+                    MU[j, 0], MU[j, 1] = self.ifft(mu_hat[0]), self.ifft(mu_hat[1])
                 j += 1
-        return Result2D(t[store], W, Qs, None)
-
-    def _run_separable(self, t, Q, f, w0=None, store=None):
-        """q = Q(x, y) f(t): transform Q once; each step is then
-        W <- E W + (b0 f0 + b1 f1) Q_hat, two operations on the spectrum."""
-        fv = np.array([f(tt) for tt in t]) if callable(f) else np.asarray(f, float)
-        Q = np.asarray(Q, dtype=self.dtype)
-        Q_hat = self.fft(Q)
-        W = np.empty((len(store), self.ny, self.nx), dtype=self.dtype)
-        Qs = np.empty_like(W)
-        w_hat = Q_hat * (fv[0] / self.A) if w0 is None else self.fft(w0)
-        j = 0
-        for i in range(t.size):
-            if i > 0:
-                dt = t[i] - t[i - 1]
-                if dt == 0:
-                    w_hat = w_hat + Q_hat * ((fv[i] - fv[i - 1]) / self.A)
-                else:
-                    E, b0, b1 = self.step_coefficients(dt)
-                    w_hat = E * w_hat + (b0 * fv[i - 1] + b1 * fv[i]) * Q_hat
-            if j < len(store) and store[j] == i:
-                W[j] = self.ifft(w_hat)
-                Qs[j] = Q * fv[i]
-                j += 1
-        return Result2D(t[store], W, Qs, None)
+        return Result2D(t[store], W, Qs, MU)
 
     # -- stresses ------------------------------------------------------------
-    def surface_stress(self, w, q):
-        """Upper-surface stresses (sxx, syy, sxy) [Pa] from w and q.
-
-        Force balance gives the moment potential directly:
-        mu_hat = (q_hat - k w_hat) / K^4  (the uniform mode carries no moment).
-        """
-        nu, H = self.shelf.nu, float(self.shelf.H)
-        mu_hat = (self.fft(q) - self.k * self.fft(w))
-        with np.errstate(divide="ignore", invalid="ignore"):
-            mu_hat = np.where(self.K4 > 0, mu_hat / self.K4, 0.0)
-        mxx = -self.KX**2 * mu_hat
-        myy = -self.KY**2 * mu_hat
-        mxy = -self.KX * self.KY * mu_hat
-        f = 6.0 / H**2
-        sxx = f * self.ifft(mxx + nu * myy)
-        syy = f * self.ifft(myy + nu * mxx)
-        sxy = f * (1 - nu) * self.ifft(mxy)
-        return sxx, syy, sxy
+    def surface_stress(self, mu):
+        """Upper-surface stresses (sxx, syy, sxy) [Pa] from the two moment
+        potentials ``mu`` (shape (2, ny, nx), e.g. ``result.mu[i]``)."""
+        m1, m2 = self.fft(mu[0]), self.fft(mu[1])
+        kxx, kyy, kxy = -self.KX**2, -self.KY**2, -self.KX * self.KY
+        mxx, myy, mxy = moments_from_potentials(kxx * m1, kyy * m1, kxx * m2, kyy * m2, kxy * m2)
+        f = 6.0 / float(self.shelf.H) ** 2
+        return f * self.ifft(mxx), f * self.ifft(myy), f * self.ifft(mxy)
 
 
 # ===========================================================================
@@ -300,7 +291,9 @@ class FDPlate:
             fix |= np.asarray(fixed, dtype=bool)
         self.fixed = fix
         self.free = np.flatnonzero(~fix.ravel())
-        self.D, self.k, self.tau = float(self.shelf.D), self.shelf.k, float(self.shelf.tau)
+        self.D, self.k = float(self.shelf.D), self.shelf.k
+        self.Dp = self.shelf.weights * self.D                 # (D1, D2)
+        self.taup = np.asarray(self.shelf.taus, dtype=float)  # (tau_1, tau_2)
         self.solver = solver
         self.cg_rtol = cg_rtol
         self.cg_iterations: list[int] = []
@@ -310,21 +303,23 @@ class FDPlate:
 
     # -- linear algebra ------------------------------------------------------
     def _system(self, dt):
+        """Factorise (sum_i c_i D_i lap^2 + k) on the free nodes (cached per dt)."""
         key = float(dt)
         if key not in self._cache:
-            a = dt / self.tau
+            a = dt / self.taup
             c = 1.0 / (1.0 + 0.5 * a)
-            Af = (c * self.D * self.Bih + self.k * sp.identity(self.nx * self.ny))
+            Dc = float((c * self.Dp).sum())
+            Af = (Dc * self.Bih + self.k * sp.identity(self.nx * self.ny))
             Aff = Af.tocsr()[self.free][:, self.free].tocsc()
             if self.solver == "lu":
                 lu = splu(Aff, permc_spec="MMD_AT_PLUS_A")
                 solve = lu.solve
             else:
-                solve = self._cg_solver(Aff.tocsr(), c)
-            self._cache[key] = (solve, c, a)
+                solve = self._cg_solver(Aff.tocsr(), Dc)
+            self._cache[key] = (solve, c, a, Dc)
         return self._cache[key]
 
-    def _cg_solver(self, Aff, c):
+    def _cg_solver(self, Aff, Dc):
         """CG preconditioned by the same operator with simply-supported
         (clamped) or exact (periodic) symbols, applied with fast transforms."""
         ex, _ = self.edges
@@ -333,7 +328,7 @@ class FDPlate:
             mx, my = self.nx - 2, self.ny - 2
             lx = -(2 - 2 * np.cos(np.pi * np.arange(1, mx + 1) / (mx + 1))) / h**2
             ly = -(2 - 2 * np.cos(np.pi * np.arange(1, my + 1) / (my + 1))) / h**2
-            sym = c * self.D * (ly[:, None] + lx[None, :]) ** 2 + self.k
+            sym = Dc * (ly[:, None] + lx[None, :]) ** 2 + self.k
             shape = (my, mx)
 
             def prec(r):
@@ -342,7 +337,7 @@ class FDPlate:
         else:
             lx = -(2 - 2 * np.cos(2 * np.pi * np.arange(self.nx) / self.nx)) / h**2
             ly = -(2 - 2 * np.cos(2 * np.pi * np.arange(self.ny) / self.ny)) / h**2
-            sym = c * self.D * (ly[:, None] + lx[None, :]) ** 2 + self.k
+            sym = Dc * (ly[:, None] + lx[None, :]) ** 2 + self.k
             shape = (self.ny, self.nx)
 
             def prec(r):
@@ -374,21 +369,25 @@ class FDPlate:
 
     # -- limits and stepping -------------------------------------------------
     def elastic(self, q):
-        solve, _, _ = self._system(0.0)
+        """Elastic response.  Returns w (ny, nx) and potentials (2, ny, nx)."""
+        solve = self._system(0.0)[0]
         q = np.asarray(q, dtype=float).ravel()
         w = self._solve(solve, q)
-        return w.reshape(self.ny, self.nx), (self.D * w).reshape(self.ny, self.nx)
+        mu = self.Dp[:, None] * w[None, :]
+        return w.reshape(self.ny, self.nx), mu.reshape(2, self.ny, self.nx)
 
     def step(self, w0, mu0, q1, dt):
         """Crank-Nicolson step, exactly as in the beam model (L* D L -> D lap^2):
-            (c D lap^2 + k) w1 = q1 + c D lap^2 w0 - lap^2 [c (1 - a/2) mu0]
-            mu1 = c [(1 - a/2) mu0 + D (w1 - w0)]
-        Arrays are flattened (ny * nx)."""
-        solve, c, a = self._system(dt)
-        rhs = q1 + c * self.D * (self.Bih @ w0) - self.Bih @ (c * (1 - 0.5 * a) * mu0)
+            (sum ci Di lap^2 + k) w1 = q1 + sum ci Di lap^2 w0 - lap^2 sum ci (1 - ai/2) mu_i0
+            mu_i1 = ci [(1 - ai/2) mu_i0 + Di (w1 - w0)]
+        w and q are flattened (ny * nx); mu has shape (2, ny * nx)."""
+        solve, c, a, Dc = self._system(dt)
+        h = 1.0 - 0.5 * a
+        rhs = q1 + Dc * (self.Bih @ w0) - self.Bih @ (c[0] * h[0] * mu0[0] + c[1] * h[1] * mu0[1])
         w1 = self._solve(solve, rhs, guess=w0)
-        mu1 = c * ((1 - 0.5 * a) * mu0 + self.D * (w1 - w0))
-        mu1[self.fixed.ravel()] = 0.0
+        dw = w1 - w0
+        mu1 = np.stack([c[i] * (h[i] * mu0[i] + self.Dp[i] * dw) for i in range(2)])
+        mu1[:, self.fixed.ravel()] = 0.0
         return w1, mu1
 
     def run(self, t, load: Callable | np.ndarray, store=None):
@@ -396,36 +395,46 @@ class FDPlate:
         store = list(range(t.size)) if store is None else list(store)
         q_at = (lambda i: np.asarray(load(t[i]), float).ravel()) if callable(load) else \
             (lambda i: np.asarray(load[i], float).ravel())
-        shape = (len(store), self.ny, self.nx)
-        W, MU, Qs = np.empty(shape), np.empty(shape), np.empty(shape)
+        N = self.nx * self.ny
+        W, Qs = np.empty((len(store), self.ny, self.nx)), np.empty((len(store), self.ny, self.nx))
+        MU = np.empty((len(store), 2, self.ny, self.nx))
         q = q_at(0)
-        w, mu = (a.ravel() for a in self.elastic(q.reshape(self.ny, self.nx)))
+        w, mu = self.elastic(q.reshape(self.ny, self.nx))
+        w, mu = w.ravel(), mu.reshape(2, N)
         j = 0
         for i in range(t.size):
             if i > 0:
                 q = q_at(i)
                 w, mu = self.step(w, mu, q, t[i] - t[i - 1])
             if j < len(store) and store[j] == i:
-                W[j], MU[j], Qs[j] = (a.reshape(self.ny, self.nx) for a in (w, mu, q))
+                W[j], Qs[j] = w.reshape(self.ny, self.nx), q.reshape(self.ny, self.nx)
+                MU[j] = mu.reshape(2, self.ny, self.nx)
                 j += 1
         return Result2D(t[store], W, Qs, MU)
 
     def force_residual(self, w, mu, q):
-        """lap^2 mu + k w - q on the free nodes (should be round-off)."""
-        r = self.Bih @ mu.ravel() + self.k * w.ravel() - q.ravel()
+        """lap^2 (mu_1 + mu_2) + k w - q on the free nodes (should be round-off)."""
+        r = self.Bih @ np.asarray(mu).reshape(2, -1).sum(axis=0) + self.k * w.ravel() - q.ravel()
         return r[self.free]
 
-    def surface_stress(self, mu):
-        """Upper-surface stresses (sxx, syy, sxy) [Pa] from the moment potential."""
-        nu, H, h = self.shelf.nu, float(self.shelf.H), self.h
+    def _second_derivatives(self, f):
+        h = self.h
         ex, ey = self.edges
-        p = np.pad(mu, ((1, 1), (0, 0)), mode="wrap" if ey == "periodic" else "reflect")
+        p = np.pad(f, ((1, 1), (0, 0)), mode="wrap" if ey == "periodic" else "reflect")
         p = np.pad(p, ((0, 0), (1, 1)), mode="wrap" if ex == "periodic" else "reflect")
-        mxx = (p[1:-1, 2:] - 2 * p[1:-1, 1:-1] + p[1:-1, :-2]) / h**2
-        myy = (p[2:, 1:-1] - 2 * p[1:-1, 1:-1] + p[:-2, 1:-1]) / h**2
-        mxy = (p[2:, 2:] - p[2:, :-2] - p[:-2, 2:] + p[:-2, :-2]) / (4 * h**2)
-        f = 6.0 / H**2
-        return f * (mxx + nu * myy), f * (myy + nu * mxx), f * (1 - nu) * mxy
+        fxx = (p[1:-1, 2:] - 2 * p[1:-1, 1:-1] + p[1:-1, :-2]) / h**2
+        fyy = (p[2:, 1:-1] - 2 * p[1:-1, 1:-1] + p[:-2, 1:-1]) / h**2
+        fxy = (p[2:, 2:] - p[2:, :-2] - p[:-2, 2:] + p[:-2, :-2]) / (4 * h**2)
+        return fxx, fyy, fxy
+
+    def surface_stress(self, mu):
+        """Upper-surface stresses (sxx, syy, sxy) [Pa] from the two moment
+        potentials ``mu`` (shape (2, ny, nx), e.g. ``result.mu[i]``)."""
+        a_xx, a_yy, _ = self._second_derivatives(mu[0])
+        b_xx, b_yy, b_xy = self._second_derivatives(mu[1])
+        mxx, myy, mxy = moments_from_potentials(a_xx, a_yy, b_xx, b_yy, b_xy)
+        f = 6.0 / float(self.shelf.H) ** 2
+        return f * mxx, f * myy, f * mxy
 
 
 # ===========================================================================

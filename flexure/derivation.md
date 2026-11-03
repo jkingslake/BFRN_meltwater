@@ -7,7 +7,8 @@ The code is in [`viscoelastic_beam.py`](viscoelastic_beam.py). The figures come
 from [`make_diagrams.py`](make_diagrams.py) and [`run_examples.py`](run_examples.py).
 
 **The whole model in two lines.** The shelf is a thin Maxwell (spring-and-dashpot)
-beam floating on sea water. The deflection $w(x,t)$, positive downwards, obeys
+beam floating on sea water. In its simplest form the deflection $w(x,t)$,
+positive downwards, obeys
 
 $$
 \Big(D\,\frac{\partial^4}{\partial x^4} + k\Big)\frac{\partial w}{\partial t}
@@ -18,6 +19,13 @@ where $q = \rho_w g\,d$ is the weight of a lake of depth $d$, $k=\rho_{sw}g$ is
 the stiffness of buoyancy, $D$ is the flexural rigidity and $\tau$ is the
 Maxwell relaxation time. When a lake first appears, the ice responds
 **elastically**. Over a few days it relaxes towards **local isostasy**, $w = q/k$.
+
+The model actually solved goes one step further. Ice creeps without changing
+volume, so its viscous Poisson's ratio is ½, while its elastic one is about
+0.3. That splits the bending moment into two parts with relaxation times of
+4.9 and 3.0 days (§5). The equation above is the special case where the two
+Poisson's ratios are equal. The split changes deflections by less than 1% and
+stresses by up to about 20% (in map view).
 
 ---
 
@@ -194,33 +202,90 @@ The right-hand plots show the two classic experiments:
 A useful mental picture is an **elastic beam whose stress-free shape slowly
 drifts towards whatever shape it is being held in**.
 
+### Two Poisson's ratios, two relaxation times
+
+So far the spring and the dashpot share the same sideways behaviour. They
+should not. Elastically, ice has a Poisson's ratio $\nu \approx 0.3$. Creep,
+however, conserves volume, so the viscous part behaves as if its Poisson's
+ratio were $\nu_v = \tfrac12$ (as in MacAyeal et al., 2021, and Bézu et al.,
+2025). A single spring–dashpot pair cannot have two Poisson's ratios.
+
+The fix comes from the plate's full moment tensor. Split it into an
+**isotropic** part (equal bending in every direction) and a **deviatoric** part
+(more bending one way than the other).
+
+* The elastic stiffnesses of the two parts are $D(1+\nu)$ and $D(1-\nu)$.
+* The viscous ones are $\Lambda(1+\nu_v)$ and $\Lambda(1-\nu_v)$.
+* Each part is its own Maxwell element.
+
+A beam in plane strain ($\kappa_{yy} = 0$) bends both parts, with weights
+$(1\pm\nu)/2$. Its moment is therefore the sum of **two Maxwell elements in
+parallel**:
+
+$$
+M = M_1 + M_2,\qquad \dot M_i = D_i\,\dot\kappa - \frac{M_i}{\tau_i},
+\qquad D_{1,2} = D\,\frac{1\pm\nu}{2},
+\tag{2'}
+$$
+
+$$
+\tau_1 = \tau\,\frac{1+\nu_v}{1+\nu} = \frac{4\eta(1+\nu_v)(1-\nu)}{E},\qquad
+\tau_2 = \tau\,\frac{1-\nu_v}{1-\nu} = \frac{4\eta(1-\nu_v)(1+\nu)}{E}.
+$$
+
+For $\nu_v = \tfrac12$ these are $\tau_1 = 6\eta(1-\nu)/E \approx 4.9$ days and
+$\tau_2 = 2\eta(1+\nu)/E \approx 3.0$ days. Four checks:
+
+* **Elastic limit:** $M = (D_1 + D_2)\kappa = D\kappa$, as before.
+* **Viscous limit:** $M = (D_1\tau_1 + D_2\tau_2)\dot\kappa = \Lambda\dot\kappa$, the same viscous rigidity as before.
+* **Mean time:** the rigidity-weighted mean $(D_1\tau_1 + D_2\tau_2)/D$ is still $\tau = \Lambda/D \approx 4.2$ days.
+* **Equal Poisson's ratios:** if $\nu_v = \nu$ the two times are equal and (2′) collapses back to the single element (2).
+
+In map view the same split gives the viscous plate law
+$M = \Lambda\big[(1-\nu_v)\dot{\boldsymbol\kappa} + \nu_v\,\mathrm{tr}(\dot{\boldsymbol\kappa})\,I\big]$.
+For $\nu_v=\tfrac12$ this is exactly the viscous bending law used by MacAyeal
+et al. (2021) and Bézu et al. (2025).
+
 ---
 
 ## 6. The master equation
 
-Now combine the force balance (1) and the material law (2). Take $\partial^2/\partial x^2$
-of (2), use (1) to replace $M''$ by $q-kw$, and use (1) differentiated in
-time, $\dot M'' = \dot q - k\dot w$:
+Now combine the force balance (1) with the material law. Take $\partial^2/\partial x^2$
+of each Maxwell law in (2′), add them, and use (1) differentiated in time,
+$\dot M'' = \dot q - k\dot w$:
 
 $$
-\dot q - k\,\dot w \;=\; D\,\frac{\partial^4\dot w}{\partial x^4} \;-\; \frac{q - k w}{\tau}
+\dot q - k\,\dot w \;=\; D\,\frac{\partial^4\dot w}{\partial x^4}
+\;-\; \frac{\partial^2}{\partial x^2}\Big(\frac{M_1}{\tau_1} + \frac{M_2}{\tau_2}\Big).
 $$
 
 Rearranged:
 
 $$
 \boxed{\;\Big(D\,\frac{\partial^4}{\partial x^4} + k\Big)\frac{\partial w}{\partial t}
-= \frac{\partial q}{\partial t} + \frac{q - k\,w}{\tau}\;}
+= \frac{\partial q}{\partial t} + \frac{\partial^2}{\partial x^2}\Big(\frac{M_1}{\tau_1} + \frac{M_2}{\tau_2}\Big)\;}
 \tag{3}
 $$
 
-Read it left to right:
+When the two times are equal ($\nu_v = \nu$), the last term is $M''/\tau$. By (1)
+that is $(q-kw)/\tau$, and (3) becomes the **single-element master equation**
+
+$$
+\Big(D\,\frac{\partial^4}{\partial x^4} + k\Big)\frac{\partial w}{\partial t}
+= \frac{\partial q}{\partial t} + \frac{q - k\,w}{\tau}.
+\tag{3'}
+$$
+
+Read (3′) left to right:
 
 * The operator in brackets is the **elastic** beam-on-springs operator.
 * $\partial q/\partial t$ is the **instantaneous elastic** response to any change in load.
 * $(q-kw)/\tau$ is the **creep** term. Wherever buoyancy is not yet carrying the
   lake ($kw\neq q$), the ice creeps at a rate set by $\tau$, and it stops only
   when $kw = q$.
+
+The full equation (3) says the same thing, except that the two parts of the
+bending moment creep away at slightly different rates.
 
 ---
 
@@ -253,8 +318,8 @@ $w = \frac{P\beta}{2k}\,e^{-\beta|x|}\big(\cos\beta|x| + \sin\beta|x|\big)$, wit
 
 Our 3 km-wide, 4 m-deep lake sinks the centre by 3.2 m at first, instead of 3.9 m.
 
-**As $t\to\infty$ the response is isostatic.** The left side of (3) goes to zero
-when nothing changes any more, so $q = k w$. The ice "forgets" its stiffness
+**As $t\to\infty$ the response is isostatic.** Once nothing changes any more
+($\dot w = 0$), each Maxwell law makes its $M_i$ decay to zero, so (1) gives $q = k w$. The ice "forgets" its stiffness
 and floats as independent columns. The dip copies the lake exactly, and the
 bending moment relaxes to zero.
 
@@ -268,10 +333,10 @@ dashed isostatic shape. The bending stresses (bottom panel) decay as it does.*
 
 ## 8. Which shapes relax first? The relaxation spectrum
 
-Because (3) is linear with constant coefficients, each sinusoid in $x$ evolves
-on its own. Put $w = \hat w(t)\cos k_x x$ and $q = \hat q\cos k_x x$, with
-$\hat q$ switched on at $t=0$. Then (3) becomes an ordinary differential equation
-with the solution
+Because the equations are linear with constant coefficients, each sinusoid in
+$x$ evolves on its own. Put $w = \hat w(t)\cos k_x x$ and $q = \hat q\cos k_x x$,
+with $\hat q$ switched on at $t=0$. Start with the single-element model. Then
+(3′) becomes an ordinary differential equation with the solution
 
 $$
 \hat w(t) = \underbrace{\frac{\hat q}{k}}_{\text{isostatic}}
@@ -290,9 +355,23 @@ $$
   On a 250 m-thick shelf, a 2 km-wavelength wiggle takes about two months to
   relax and a 1 km one takes more than two years.
 
+**With two Poisson's ratios** each wavelength relaxes as the sum of two
+exponentials. Their exact form is a $2\times2$ matrix exponential per mode
+(`relaxation_times` and `modal_step_response` in the code); the left panel above
+shows both times.
+
+* The **slow mode** stays within 15% of $\tau_\lambda$, and within 1% for
+  narrow features. It carries most of the creep.
+* The **fast mode** has a time of 3.0–3.5 days. It carries up to about a third of
+  the (already small) relaxation of broad features, and almost none of the
+  relaxation of narrow ones.
+
+That is why the deflection hardly changes (right panel: dotted lines are the
+single-element model).
+
 This also tells us that the problem is **not stiff** numerically. The fastest
-decay rate of any mode is $1/\tau$, so a time step of a fraction of $\tau$ is
-enough for every wavelength.
+decay rate of any mode is $1/\tau_2$ (about 3 days), so a time step of a
+fraction of a day is enough for every wavelength.
 
 ---
 
@@ -388,35 +467,37 @@ spatially varying $D(x)$ (a thinning shelf) costs nothing extra.
 
 ![time step](figures/diagram_timestep.png)
 
-Step from $t_n$ to $t_{n+1} = t_n + \Delta t$. Write $a = \Delta t/\tau$.
+Step from $t_n$ to $t_{n+1} = t_n + \Delta t$. For each part $i = 1, 2$ write
+$a_i = \Delta t/\tau_i$ and $c_i = 1/(1 + a_i/2)$.
 
-**1. Moment update.** Apply the trapezoidal (Crank–Nicolson) rule to the
-Maxwell law $\dot M = D L\dot w - M/\tau$ at every node:
-
-$$
-M^{n+1} = c\,\Big[(1-\tfrac a2)\,M^n + D\,L\,(w^{n+1}-w^n)\Big],\qquad c = \frac{1}{1 + a/2}.
-$$
-
-**2. Deflection solve.** Substitute this into the force balance at the new
-time, $L^*M^{n+1} + k\,w^{n+1} = q^{n+1}$. This gives **one linear system** for
-the new deflection:
+**1. Moment update.** Apply the trapezoidal (Crank–Nicolson) rule to each
+Maxwell law $\dot M_i = D_i L\dot w - M_i/\tau_i$ at every node:
 
 $$
-\big(\underbrace{L^* cD\,L + k\,I}_{\text{constant, pentadiagonal}}\big)\,w^{n+1}
-= q^{n+1} + L^* cD\,L\,w^n - L^*\big[c\,(1-\tfrac a2)\,M^n\big].
+M_i^{n+1} = c_i\,\Big[(1-\tfrac{a_i}2)\,M_i^n + D_i\,L\,(w^{n+1}-w^n)\Big].
 $$
 
-**3. Repeat.** Solve step 2 for $w^{n+1}$, then evaluate step 1 for $M^{n+1}$.
+**2. Deflection solve.** Substitute these into the force balance at the new
+time, $L^*(M_1^{n+1} + M_2^{n+1}) + k\,w^{n+1} = q^{n+1}$. This gives **one
+linear system** for the new deflection, with $\bar D = c_1D_1 + c_2D_2$:
 
-That is the entire algorithm. In the code it reads:
+$$
+\big(\underbrace{L^* \bar D\,L + k\,I}_{\text{constant, pentadiagonal}}\big)\,w^{n+1}
+= q^{n+1} + L^* \bar D\,L\,w^n - L^*\Big[\textstyle\sum_i c_i\,(1-\tfrac{a_i}2)\,M_i^n\Big].
+$$
+
+**3. Repeat.** Solve step 2 for $w^{n+1}$, then evaluate step 1 for each $M_i^{n+1}$.
+
+That is the entire algorithm. In the code it reads (`Mp0` holds the two parts,
+and `c`, `a` have one row per part):
 
 ```python
-def step(self, w0, M0, q1, dt):
-    lu, S, c, a = self._step_matrices(dt)          # S = L* (c D) L, factorised once
-    rhs = q1 + S @ w0 - self.Lstar @ (c * (1 - a/2) * M0)
+def step(self, w0, Mp0, q1, dt):
+    lu, S, c, a = self._step_matrices(dt)          # S = L* (c1 D1 + c2 D2) L, factorised once
+    rhs = q1 + S @ w0 - self.Lstar @ (c * (1 - a/2) * Mp0).sum(axis=0)
     w1 = self._solve(lu, rhs)                       # one banded back-substitution
-    M1 = c * ((1 - a/2) * M0 + self.D * (self.L @ (w1 - w0)))
-    return w1, M1
+    Mp1 = c * ((1 - a/2) * Mp0 + self.Dp * (self.L @ (w1 - w0)))
+    return w1, Mp1
 ```
 
 ### Why this is a good scheme
@@ -431,7 +512,7 @@ def step(self, w0, M0, q1, dt):
 * **Force balance holds to round-off at every step.** The two operators are used
   consistently, so the discrete version of (1) is satisfied exactly, and the
   stresses are physically consistent.
-* **Choosing steps.** $\Delta x \lesssim \ell/10$ and $\Delta t \lesssim \tau/10$
+* **Choosing steps.** $\Delta x \lesssim \ell/10$ and $\Delta t \lesssim \tau_2/10$
   give errors well below 0.1 % (see the convergence panel below).
 
 ---
@@ -448,7 +529,9 @@ run with `python -m pytest -q`) checks the model against exact solutions:
 | elastic strip load, free beam | Hetényi (1946) | < 0.2 % |
 | line load at a free calving front | $w = \frac{2P\beta}{k}e^{-\beta x}\cos\beta x$ | < 0.2 % |
 | uniform load, clamped grounding line | $w = \frac{q}{k}\big[1 - e^{-\beta x}(\cos\beta x + \sin\beta x)\big]$ (the tidal-flexure profile) | < 0.1 % |
-| viscoelastic relaxation of a lake | exact Fourier-mode solution (§8) | < 0.2 % |
+| viscoelastic relaxation of a lake | exact Fourier-mode solution (§8, two-element) | < 0.2 % |
+| equal Poisson's ratios | the single-element closed form $\tau_\lambda = \tau[1+(k\ell)^4]$ | to round-off |
+| moment tensor in map view | $D[(1-\nu)\kappa + \nu\,\mathrm{tr}\,\kappa\,I]$ elastically, $\Lambda[(1-\nu_v)\dot\kappa + \nu_v\,\mathrm{tr}\,\dot\kappa\,I]$ when viscous | $<10^{-4}$ |
 | long-time limit | local isostasy $w = q/k$, $M\to0$ | ✓ |
 | uniform load on a free beam | no bending at all | to round-off |
 | discrete force balance $L^*M + kw = q$ | (all boundary-condition combinations) | to round-off |
@@ -486,13 +569,16 @@ run with `python -m pytest -q`) checks the model against exact solutions:
 |---|---|---|
 | $H$ | ice thickness | 250 m |
 | $E$ | effective Young's modulus (tidal-flexure studies infer about 1 GPa, well below the laboratory 9 GPa; e.g. Vaughan, 1995) | 1 GPa |
-| $\nu$ | Poisson's ratio | 0.3 |
+| $\nu$ | elastic Poisson's ratio | 0.3 |
+| $\nu_v$ | Poisson's ratio of viscous creep (incompressible) | 0.5 |
 | $\eta$ | ice viscosity | $10^{14}$ Pa s |
 | $\rho_i,\ \rho_{sw},\ \rho_w$ | ice, sea water, meltwater densities | 917, 1028, 1000 kg m⁻³ |
 | $D = EH^3/12(1-\nu^2)$ | flexural rigidity | $1.4\times10^{15}$ N m |
 | $k = \rho_{sw}g$ | buoyancy stiffness | $1.0\times10^4$ Pa m⁻¹ |
 | $\ell = (D/k)^{1/4}$ | flexural length | 614 m |
-| $\tau = 4\eta(1-\nu^2)/E$ | Maxwell time | 4.2 days |
+| $\tau = 4\eta(1-\nu^2)/E$ | mean Maxwell time | 4.2 days |
+| $\tau_1 = 4\eta(1+\nu_v)(1-\nu)/E$ | relaxation time, isotropic part | 4.9 days |
+| $\tau_2 = 4\eta(1-\nu_v)(1+\nu)/E$ | relaxation time, deviatoric part | 3.0 days |
 
 The values of $E$ and especially $\eta$ are uncertain by an order of magnitude
 or more. Treat the numbers above as illustrative. Because $\ell \propto E^{1/4}H^{3/4}$
@@ -500,6 +586,7 @@ and $\tau \propto \eta/E$, it is easy to rescale the results.
 
 * Banwell, A. F., MacAyeal, D. R., & Sergienko, O. V. (2013). Breakup of the Larsen B Ice Shelf triggered by chain reaction drainage of supraglacial lakes. *Geophysical Research Letters*, 40, 5872–5876.
 * Banwell, A. F., Willis, I. C., Macdonald, G. J., Goodsell, B., & MacAyeal, D. R. (2019). Direct measurements of ice-shelf flexure caused by surface meltwater ponding and drainage. *Nature Communications*, 10, 730.
+* Bézu, C., Lipovsky, B. P., Shapero, D. R., & Banwell, A. F. (2025). Ice shelf evolution combining flow, flexure, and fracture. *Journal of Glaciology*, 71, e112.
 * Hetényi, M. (1946). *Beams on Elastic Foundation*. University of Michigan Press.
 * Holdsworth, G. (1969). Flexure of a floating ice tongue. *Journal of Glaciology*, 8(54), 385–397.
 * MacAyeal, D. R., & Sergienko, O. V. (2013). The flexural dynamics of melting ice shelves. *Annals of Glaciology*, 54(63), 1–10.
