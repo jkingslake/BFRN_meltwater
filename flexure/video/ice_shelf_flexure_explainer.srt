@@ -1,0 +1,203 @@
+1
+00:00:00,000 --> 00:00:05,069
+Every summer, meltwater pools into lakes on the surface of Antarctica's floating ice shelves.
+
+2
+00:00:05,300 --> 00:00:11,713
+Those lakes are heavy, and the ice bends beneath them. Bend it far enough, or back and forth often enough, and it can crack.
+
+3
+00:00:11,933 --> 00:00:22,357
+In this video we'll build a simple model of that bending: a two-dimensional viscoelastic beam. We'll derive it step by step, and then solve it on a computer in a few lines of code.
+
+4
+00:00:23,367 --> 00:00:31,721
+Take a vertical slice through an ice shelf, from the grounding line, where the ice lifts off the bed, out to the calving front, where it meets the open ocean.
+
+5
+00:00:31,933 --> 00:00:37,323
+The ice is a few hundred metres thick, and it floats, with roughly nine tenths of it below sea level.
+
+6
+00:00:37,533 --> 00:00:48,555
+Now add a lake of depth d. Its weight presses down on the ice with a load q, equal to rho w, g, d. The ice is pushed down by a distance w, which we'll measure positive downwards.
+
+7
+00:00:48,767 --> 00:00:54,817
+Our goal is to predict w, as a function of position x and time t, and the stresses that come with it.
+
+8
+00:00:55,033 --> 00:01:02,748
+We'll assume the ice is a thin beam, the deflections are small, nothing varies across the page, and the ocean responds hydrostatically.
+
+9
+00:01:03,767 --> 00:01:11,033
+First ingredient: buoyancy. A floating column of ice sinks until the sea water it pushes aside weighs as much as the ice.
+
+10
+00:01:11,233 --> 00:01:21,209
+Put a lake on top, and the column is pushed down by w. It displaces extra sea water, so the ocean pushes back with an extra pressure: rho s w, g, w.
+
+11
+00:01:21,433 --> 00:01:29,511
+That's exactly like resting the ice on a bed of springs, with stiffness k equal to rho s w, g: about ten thousand pascals per metre.
+
+12
+00:01:29,733 --> 00:01:39,603
+If the ice had no stiffness at all, each column would simply sink until k w equals q, and the dip would copy the lake exactly. That's called local isostasy.
+
+13
+00:01:40,633 --> 00:01:46,343
+But ice is stiff, so each column drags on its neighbours. Cut out a thin slice of width d x.
+
+14
+00:01:46,567 --> 00:01:53,513
+The lake pushes down, buoyancy pushes up, and the ice on either side exerts shear forces, V, and bending moments, M.
+
+15
+00:01:53,733 --> 00:02:02,536
+Balancing vertical forces gives: d V by d x equals q minus k w. Balancing moments gives: d M by d x equals V.
+
+16
+00:02:02,767 --> 00:02:12,700
+Put them together, and we have our first key equation: the second derivative of M, plus k w, equals q. Wherever buoyancy isn't holding up the lake, bending moments must.
+
+17
+00:02:13,700 --> 00:02:19,879
+Next: how does the bending moment depend on the shape? When a beam bends, its cross-sections stay flat, but they tilt.
+
+18
+00:02:20,100 --> 00:02:27,644
+So a fibre a height z above the middle is stretched by z times kappa, where kappa, the curvature, is the second derivative of w.
+
+19
+00:02:27,867 --> 00:02:35,837
+For an elastic material, stress is proportional to strain. Add up the turning effect of every fibre, and you get: M equals D kappa.
+
+20
+00:02:36,067 --> 00:02:42,736
+The flexural rigidity, D, goes as the thickness cubed, so doubling the thickness makes the shelf eight times stiffer.
+
+21
+00:02:42,967 --> 00:02:55,268
+For a viscous fluid, stress depends instead on how fast the strain changes. The same sum gives: M equals capital lambda, times the rate of change of kappa, where lambda depends on the viscosity, eta.
+
+22
+00:02:56,300 --> 00:03:07,321
+Real ice is both. Over hours it behaves like a spring, but over weeks it flows. The simplest material that does both is a Maxwell element: a spring and a dashpot, joined in series.
+
+23
+00:03:07,533 --> 00:03:09,637
+Their rates of bending simply add.
+
+24
+00:03:09,867 --> 00:03:17,752
+Hold the moment fixed, and the curvature jumps, then creeps steadily. Hold the curvature fixed, and the moment relaxes away exponentially.
+
+25
+00:03:17,967 --> 00:03:25,980
+The timescale is the Maxwell time, tau, equal to capital lambda over D. For typical ice-shelf values, tau is about four days.
+
+26
+00:03:27,000 --> 00:03:33,563
+Now we combine the two. Take two x derivatives of the Maxwell law, and use the force balance to replace the moments.
+
+27
+00:03:33,767 --> 00:03:37,556
+Everything collapses into a single master equation for the deflection.
+
+28
+00:03:37,767 --> 00:03:42,751
+Read it like this. The bracket on the left is just an elastic beam, resting on springs.
+
+29
+00:03:42,967 --> 00:03:48,484
+The first term on the right says that any change in the load gets an instant, elastic response.
+
+30
+00:03:48,700 --> 00:03:57,012
+And the second says that, wherever buoyancy isn't yet carrying the lake, the ice keeps creeping, at a rate set by tau, until k w equals q.
+
+31
+00:03:58,033 --> 00:04:09,545
+That gives two limits. At the instant the lake appears, the response is purely elastic. Its natural length scale is the flexural length, ell: the fourth root of D over k, about six hundred metres here.
+
+32
+00:04:09,767 --> 00:04:15,433
+A long time later, the ice relaxes to local isostasy, and the dip simply copies the lake.
+
+33
+00:04:15,667 --> 00:04:26,133
+Here's the model running, for a lake three kilometres wide and four metres deep. The orange curve is the instant elastic response: a broad dish, with small bulges on either side.
+
+34
+00:04:26,333 --> 00:04:37,141
+Over a few Maxwell times, the ice creeps towards the dashed isostatic shape, and the bending stresses, shown below, slowly fade away. Notice that the sharp edges are the last to relax.
+
+35
+00:04:38,700 --> 00:04:48,036
+Why do some parts relax faster than others? Split the load into waves. Each wavelength jumps elastically, then relaxes exponentially, on its own timescale.
+
+36
+00:04:48,267 --> 00:04:58,989
+Broad features relax in about one Maxwell time. But narrow features, less than a few flexural lengths across, are held up by the ice's stiffness, and can take months, or even years.
+
+37
+00:04:59,200 --> 00:05:06,211
+Handily, nothing ever relaxes faster than tau itself, so the equations aren't stiff, and the numerics can be kept simple.
+
+38
+00:05:07,233 --> 00:05:14,841
+On to the numerics. Place nodes along the beam, a distance delta x apart, and store the deflection and the bending moment at each one.
+
+39
+00:05:15,067 --> 00:05:25,405
+Two small matrices do all the work. L turns deflection into curvature, and L star turns moments into net force. Both are the familiar one, minus two, one stencil.
+
+40
+00:05:25,633 --> 00:05:34,607
+They differ only in their end rows, which is where the boundary conditions live: a clamped grounding line goes into L, and a free calving front goes into L star.
+
+41
+00:05:34,833 --> 00:05:44,361
+To step forward in time, apply the trapezoidal rule to the Maxwell law, and substitute it into the force balance. That leaves a single linear system for the new deflection.
+
+42
+00:05:44,567 --> 00:05:54,692
+The matrix never changes, so it's factorised once, and each time step is just one banded solve. Three thousand nodes and twelve hundred time steps take about a second.
+
+43
+00:05:54,900 --> 00:06:03,511
+And it checks out. It matches the exact elastic solutions and the exact Fourier solution, and it converges at second order in both space and time.
+
+44
+00:06:04,533 --> 00:06:11,608
+Now let's use it. A lake fills over ten days, sits for fifteen, then drains in just six hours, perhaps through a new fracture.
+
+45
+00:06:11,833 --> 00:06:20,764
+As the lake fills, the ice sags, and a ring of tension, of one to two hundred kilopascals, forms just outside the shoreline. That's enough to open crevasses.
+
+46
+00:06:20,967 --> 00:06:25,119
+While the lake sits, the stresses relax. The ice gets used to being bent.
+
+47
+00:06:25,367 --> 00:06:37,092
+Then the lake drains. The ice springs back elastically, but it's now bent the other way: the surface beneath the old lake is pulled into tension, of over three hundred kilopascals, and a dip lingers for weeks.
+
+48
+00:06:37,300 --> 00:06:44,396
+So filling isn't the only danger. Every fill and drain cycle flips the stress, like bending a paperclip back and forth.
+
+49
+00:06:45,400 --> 00:06:51,515
+To recap. Buoyancy acts like a bed of springs, ice bends like a beam, and a Maxwell material lets it flow.
+
+50
+00:06:51,733 --> 00:06:59,256
+Together they give one master equation: elastic at first, isostatic in the long run, with narrow features relaxing slowest.
+
+51
+00:06:59,467 --> 00:07:06,883
+The code, the full derivation with diagrams, and the tests are all in the flexure folder of this repository. Thanks for watching.

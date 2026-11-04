@@ -1,0 +1,6 @@
+__pycache__/
+.pytest_cache/
+video/media/
+video/audio_cache/
+video/subtitles/
+outputs/

@@ -30,3 +30,7 @@ The /matlab directory contains code written in 2019/2020 in matlab to compute th
 The /python directory contains code using a third-party library called fill-spill-merge to do a similar computation that the matlab code was designed to perform. fill-spill-merge is written in C++ and is well tested. The directory contains a number of Jupyter notebooks that use python to call fill-spill-merge and analyze and plot the results. 
 
 Barnes, R., Callaghan, K.L. and Wickert, A.D., 2020. Computing water flow through complex landscapes, Part 3: Fill-Spill-Merge: Flow routing in depression hierarchies. Earth Surface Dynamics Discussions, 2020, pp.1-22.
+
+## Ice-shelf flexure from meltwater loading
+
+The `/flexure` directory contains a 2-D viscoelastic (Maxwell) beam model of how a floating ice shelf bends under the weight of surface meltwater lakes. It also contains a step-by-step derivation with diagrams ([`flexure/derivation.md`](flexure/derivation.md)), verification tests against exact solutions, and a narrated Manim explainer video ([`flexure/video/ice_shelf_flexure_explainer.mp4`](flexure/video/ice_shelf_flexure_explainer.mp4)). See [`flexure/README.md`](flexure/README.md) for details.
