@@ -55,3 +55,46 @@ def apply():
         "savefig.dpi": 160,
         "savefig.bbox": "tight",
     })
+
+
+# ---------------------------------------------------------------------------
+# Map helpers for (y, x) DataArrays in polar-stereographic metres
+# ---------------------------------------------------------------------------
+def map_extent(da, scale=1e-3):
+    """imshow extent [km] of a (y, x) DataArray with regular coordinates."""
+    import numpy as np
+    x, y = np.asarray(da.x) * scale, np.asarray(da.y) * scale
+    hx, hy = abs(x[1] - x[0]) / 2, abs(y[1] - y[0]) / 2
+    return [x.min() - hx, x.max() + hx, y.min() - hy, y.max() + hy]
+
+
+def show_map(ax, da, title=None, cbar=None, grid=False, **kw):
+    """Draw a (y, x) DataArray on ``ax`` with axes in km; returns the image.
+    Call it again on the same axes to overlay another field."""
+    import numpy as np
+    flip = float(da.y[0]) < float(da.y[-1])
+    im = ax.imshow(np.asarray(da)[::-1] if flip else np.asarray(da), extent=map_extent(da),
+                   interpolation="nearest", **kw)
+    if title is not None:
+        ax.set_title(title)
+    ax.set_xlabel("x (km)")
+    ax.set_ylabel("y (km)")
+    ax.set_aspect("equal")
+    ax.grid(grid)
+    if cbar:
+        import matplotlib.pyplot as plt
+        plt.colorbar(im, ax=ax, shrink=0.8, label=cbar)
+    return im
+
+
+def hillshade(dem, azimuth=315.0, altitude=35.0, exaggeration=10.0):
+    """Grey-scale hillshade (0-1) of a (y, x) DEM DataArray."""
+    import numpy as np
+    z = np.asarray(dem, float) * exaggeration
+    dx, dy = abs(float(dem.x[1] - dem.x[0])), abs(float(dem.y[1] - dem.y[0]))
+    gy, gx = np.gradient(z, dy, dx)
+    slope = np.arctan(np.hypot(gx, gy))
+    aspect = np.arctan2(-gx, gy)
+    az, alt = np.radians(azimuth), np.radians(altitude)
+    hs = np.sin(alt) * np.cos(slope) + np.cos(alt) * np.sin(slope) * np.cos(az - aspect)
+    return dem.copy(data=np.clip(hs, 0, 1))

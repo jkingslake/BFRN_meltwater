@@ -13,11 +13,15 @@ a step-by-step derivation with diagrams and a narrated explainer video.
 | **Derivation (start here)** | [`derivation.md`](derivation.md): physics → master equation → limits → relaxation spectrum → numerics → verification, with diagrams at every step. Also as a PDF: [`derivation.pdf`](derivation.pdf) (rebuild with `python make_pdf.py`) |
 | **Explainer video** | [`video/ice_shelf_flexure_explainer.mp4`](video/ice_shelf_flexure_explainer.mp4): Manim animation with a British-English voice-over and subtitles ([narration script](video/narration_script.md)) |
 | **Tutorial notebook** | [`flexure_model_tutorial.ipynb`](flexure_model_tutorial.ipynb): how to use the model, every verification test from the derivation, the 2-D (map-view) plate extension including a real fill-spill-merge lake map, and a study of computation time |
+| **Lake drainage** | [`lake_drainage_flexure.ipynb`](lake_drainage_flexure.ipynb): fill a REMA surface with fill-spill-merge, choose a lake, drain it and record how the shelf flexes back up (unloading only), saved as xarray/NetCDF |
+| **Routing on a flexing shelf** | [`coupled_routing_flexure.ipynb`](coupled_routing_flexure.ipynb): fill-spill-merge and the plate run together through a melt season, each moving the other, compared with routing on a rigid shelf |
+| **Drainage reorganisation** | [`drainage_reorganisation.ipynb`](drainage_reorganisation.ipynb): after a lake drains and the shelf rebounds, does next summer's water go back into the old basin or get redirected? (after Warner et al. 2021) |
+| **Routing glue** | [`lake_routing.py`](lake_routing.py): DEM and mask loading, calls to the fill-spill-merge wrapper, lake labelling, a plate under the routing grid, the drainage and coupled experiments, drainage basins and overflow routes |
 | **Model (1-D)** | [`viscoelastic_beam.py`](viscoelastic_beam.py): one file, NumPy and SciPy only. [`fast_beam.py`](fast_beam.py): the same time loop using banded LAPACK or Numba (5–20× less overhead per step) |
 | **Model (2-D plate)** | [`viscoelastic_plate.py`](viscoelastic_plate.py): `SpectralPlate` (periodic, FFT, exact in time) and `FDPlate` (finite differences with clamped edges and a grounded-ice mask; sparse LU or preconditioned CG) |
 | **Worked examples** | [`run_examples.py`](run_examples.py): writes the result figures in `figures/` |
 | **Diagrams** | [`make_diagrams.py`](make_diagrams.py): writes the schematic figures in `figures/diagram_*.png` |
-| **Tests** | [`tests/`](tests): 24 checks against exact solutions (beam: Hetényi, grounding line, free edge, Fourier modes, convergence; plate: Kelvin-function point load, beam limit, solver agreement, exact time integration, force balance) |
+| **Tests** | [`tests/`](tests): 32 checks, mostly against exact solutions (beam: Hetényi, grounding line, free edge, Fourier modes, convergence; plate: Kelvin-function point load, beam limit, solver agreement, exact time integration, force balance; routing glue: volume conservation, rebound towards isostasy, restarts, drainage basins and overflow routes, water budgets of the coupled loop) |
 
 ## The model in one equation
 
@@ -53,7 +57,7 @@ pip install numpy scipy matplotlib pytest
 cd flexure
 python viscoelastic_beam.py   # parameters and a timing demo
 python run_examples.py        # figures/*.png
-python -m pytest -q           # 24 verification tests
+python -m pytest -q           # 32 tests (the routing ones skip without fill-spill-merge)
 ```
 
 ```python
@@ -81,6 +85,43 @@ meltwater routing.
 `load` can be any function `q(t)` or an array of shape `(nt, nx)`. `H` can be
 an array, for a shelf of varying thickness. Boundary conditions can be
 `'free'` (calving front or far field) or `'clamped'` (grounding line).
+
+## Meltwater routing with fill-spill-merge
+
+The three routing notebooks use the original fill-spill-merge algorithm
+(Barnes, Callaghan & Wickert 2021) through the Python wrapper
+[`jkingslake/fillspillmerge`](https://github.com/jkingslake/fillspillmerge).
+Build the wrapper (it needs CMake, Boost and pybind11), then either install it
+or tell `lake_routing.py` where it is:
+
+```bash
+export FILLSPILLMERGE_PATH=/path/to/fillspillmerge   # the folder holding fillspillmerge/ and build/
+pip install rioxarray numba                          # numba is optional (fast drainage basins)
+```
+
+`lake_routing.py` also looks next to this repository, in `../fillspillmerge`
+and `../fsm_pywrapper/fillspillmerge`. The notebooks use the 32 m REMA subset
+`python/notebooks/rema_subsets/dem_small_2.tif`, averaged to 64 m for routing,
+with a 128 m plate underneath and the grounded ice of
+`data/Mask_Antarctica_v02.tif` held fixed. On this DEM the wrapper reproduces
+the repository's reference result `fsm_results/rema_tests/test-wtd.tif` to
+within float32 rounding.
+
+```python
+from lake_routing import load_dem, floating_mask, route, find_lakes, pick_lake, ShelfPlate, drain_lake, DAY
+from viscoelastic_beam import IceShelf
+
+dem = load_dem("../python/notebooks/rema_subsets/dem_small_2.tif", coarsen=2)
+floating = floating_mask(dem)
+water = route(dem, 0.5)                        # 0.5 m of melt everywhere -> water depth (DataArray)
+labels, lakes = find_lakes(water, floating)    # lakes: an xarray.Dataset along dimension "lake"
+lake = pick_lake(lakes)                        # or pick_lake(lakes, near=(x, y)) / pick_lake(lakes, lake=label)
+plate = ShelfPlate(dem, floating, IceShelf(H=400.0))
+resp = drain_lake(plate, water.where(labels == lake, 0), [0.5 * DAY, 30 * DAY, 365 * DAY])
+resp.uplift                                    # (time, y, x) uplift after drainage [m]
+```
+
+Outputs written by the notebooks go to `outputs/`, which git ignores.
 
 ## Numerics in brief
 

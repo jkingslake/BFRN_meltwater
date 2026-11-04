@@ -3,3 +3,4 @@ __pycache__/
 video/media/
 video/audio_cache/
 video/subtitles/
+outputs/
