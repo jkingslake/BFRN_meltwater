@@ -99,7 +99,7 @@ def example_fill_drain():
     f = frac(t)
     i0 = np.argmin(np.abs(x))
     w_el_full, M_el_full = beam.elastic(q_full)
-    td = res.t_days
+    td = res.time_days.values
 
     fig = plt.figure(figsize=(9.5, 8.4))
     gs = fig.add_gridspec(3, 2, height_ratios=[0.65, 1, 1], hspace=0.55, wspace=0.28)
@@ -262,7 +262,7 @@ def example_verification():
     load = lambda tt: SHELF.lake_load(LAKE_DEPTH * np.cos(0.5 * np.pi * s) ** 2) * \
         np.sin(np.pi * tt / T) ** 2
     bm = ViscoelasticBeam(x, SHELF)
-    ref = bm.run(np.linspace(0, T, 8193), load).w[-1]
+    ref = bm.run(np.linspace(0, T, 8193), load).w[-1].values
     scale = np.max(np.abs(ref))
     nts = np.array([8, 16, 32, 64, 128])
     et = np.array([np.max(np.abs(bm.run(np.linspace(0, T, n + 1), load).w[-1] - ref))

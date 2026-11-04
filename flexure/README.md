@@ -66,9 +66,17 @@ beam = ViscoelasticBeam(x, shelf, left="clamped", right="free")
 depth = parabolic_lake(x, centre=8e3, half_width=1.5e3, max_depth=4.0)
 t = np.linspace(0, 30, 601) * SECONDS_PER_DAY
 res = beam.run(t, lambda tt: shelf.lake_load(depth) * min(tt / (10 * SECONDS_PER_DAY), 1))
-res.w       # deflection [m], shape (time, x)
-res.sigma   # upper-surface bending stress [Pa], + = tension
+res                                   # an xarray.Dataset with dims (time, x)
+res.w                                 # deflection [m], + down
+res.sigma.sel(time_days=10, method="nearest")   # upper-surface stress [Pa], + = tension
+res.to_netcdf("lake_run.nc")          # parameters are stored in res.attrs
 ```
+
+All models return `xarray.Dataset`s: the 1-D beam over `(time, x)` and the
+2-D plates over `(time, y, x)`, with stresses and the shelf parameters
+included. Every model can also be stepped one interval at a time with
+`start(q0)` then `advance(q1, dt)`, for coupling to other models such as
+meltwater routing.
 
 `load` can be any function `q(t)` or an array of shape `(nt, nx)`. `H` can be
 an array, for a shelf of varying thickness. Boundary conditions can be

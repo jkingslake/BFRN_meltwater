@@ -42,23 +42,58 @@ potentials are stacked along a leading axis of length 2.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Callable, Sequence
 
 import numpy as np
 import scipy.fft as sfft
 import scipy.sparse as sp
+import xarray as xr
 from scipy.sparse.linalg import LinearOperator, cg, splu
 
-from viscoelastic_beam import IceShelf, SECONDS_PER_DAY, expm_2x2, maxwell_modes  # noqa: F401
+from viscoelastic_beam import (IceShelf, SECONDS_PER_DAY, expm_2x2, maxwell_modes,  # noqa: F401
+                               shelf_attrs)
+
+PARTS = ["isotropic", "deviatoric"]
 
 
-@dataclass
-class Result2D:
-    t: np.ndarray            # output times [s]
-    w: np.ndarray            # deflection, shape (nt, ny, nx) [m]
-    q: np.ndarray            # load at the output times [Pa]
-    mu: np.ndarray | None    # moment potentials, shape (nt, 2, ny, nx) [N m^2]
+def plate_dataset(plate, t, w, q, mu=None, stresses=True, **attrs) -> xr.Dataset:
+    """Package a 2-D run as an ``xarray.Dataset`` with dims (time, y, x).
+
+    Variables: ``w`` (deflection, + down), ``q`` (load), ``mu`` (the two moment
+    potentials, dim ``part``) and, with ``stresses``, the upper-surface stresses
+    ``sxx``, ``syy``, ``sxy`` and the largest principal stress ``sigma1``."""
+    t = np.asarray(t, dtype=float)
+    dims = ("time", "y", "x")
+    ds = xr.Dataset(
+        {"w": (dims, np.asarray(w), {"units": "m", "long_name": "deflection (positive downwards)"}),
+         "q": (dims, np.asarray(q), {"units": "Pa", "long_name": "surface load (positive downwards)"})},
+        coords={"time": ("time", t, {"units": "s"}),
+                "time_days": ("time", t / SECONDS_PER_DAY, {"units": "days"}),
+                "x": ("x", plate.x, {"units": "m"}), "y": ("y", plate.y, {"units": "m"})},
+        attrs={**shelf_attrs(plate.shelf), **attrs},
+    )
+    if mu is not None:
+        ds["mu"] = (("time", "part", "y", "x"), np.asarray(mu),
+                    {"units": "N m^2", "long_name": "moment potentials (isotropic, deviatoric)"})
+        ds = ds.assign_coords(part=("part", PARTS))
+        if stresses:
+            st = [plate.surface_stress(m) for m in np.asarray(mu)]
+            names = ("sxx", "syy", "sxy")
+            for k, name in enumerate(names):
+                ds[name] = (dims, np.stack([s_[k] for s_ in st]),
+                            {"units": "Pa", "long_name": f"upper-surface stress {name[1:]} (+ = tension)"})
+            s1, s2 = principal_stresses(ds.sxx.values, ds.syy.values, ds.sxy.values)
+            ds["sigma1"] = (dims, s1, {"units": "Pa", "long_name": "largest principal surface stress (+ = tension)"})
+    return ds
+
+
+def _grid_coords(n, d, given):
+    if given is None:
+        return np.arange(n) * d
+    given = np.asarray(given, dtype=float)
+    if given.size != n:
+        raise ValueError("coordinate length does not match the grid")
+    return given
 
 
 def moments_from_potentials(m1_xx, m1_yy, m2_xx, m2_yy, m2_xy):
@@ -91,12 +126,13 @@ class SpectralPlate:
     """
 
     def __init__(self, nx: int, ny: int, dx: float, shelf: IceShelf | None = None,
-                 dy: float | None = None, dtype=np.float64, workers: int = -1):
+                 dy: float | None = None, dtype=np.float64, workers: int = -1, x=None, y=None):
         self.shelf = shelf if shelf is not None else IceShelf()
         if np.ndim(self.shelf.H) != 0:
             raise ValueError("SpectralPlate needs a uniform thickness")
         self.nx, self.ny = nx, ny
         self.dx, self.dy = dx, (dy if dy is not None else dx)
+        self.x, self.y = _grid_coords(nx, self.dx, x), _grid_coords(ny, self.dy, y)
         self.dtype = np.dtype(dtype)
         self.workers = workers
         kx = 2 * np.pi * sfft.rfftfreq(nx, self.dx)
@@ -157,7 +193,8 @@ class SpectralPlate:
         s = (q1_hat - q0_hat) / dt
         return [E11 * m1 + E12 * m2 + B1 * s, E21 * m1 + E22 * m2 + B2 * s]
 
-    def run(self, t: Sequence[float], load, store: Sequence[int] | None = None, store_mu=True):
+    def run(self, t: Sequence[float], load, store: Sequence[int] | None = None, store_mu=True,
+            stresses=True) -> xr.Dataset:
         """Integrate through the times ``t`` (the load is linear in between).
 
         ``load`` may be
@@ -168,8 +205,9 @@ class SpectralPlate:
             is transformed only once.
         ``store`` lists the time indices to return (default: all).  Only those
         need inverse FFTs.  The plate starts from rest with an elastic response
-        to q(t[0]).  With ``store_mu`` the moment potentials are returned too
-        (needed for stresses).
+        to q(t[0]).  Returns an ``xarray.Dataset`` (see :func:`plate_dataset`);
+        ``store_mu`` keeps the moment potentials and ``stresses`` adds the
+        surface stresses computed from them.
         """
         t = np.asarray(t, dtype=float)
         store = list(range(t.size)) if store is None else list(store)
@@ -205,12 +243,46 @@ class SpectralPlate:
                 if store_mu:
                     MU[j, 0], MU[j, 1] = self.ifft(mu_hat[0]), self.ifft(mu_hat[1])
                 j += 1
-        return Result2D(t[store], W, Qs, MU)
+        return plate_dataset(self, t[store], W, Qs, MU, stresses=stresses and store_mu,
+                             model="SpectralPlate", dx=self.dx, dy=self.dy)
+
+    # -- step by step (for coupling to other models) -------------------------
+    def start(self, q0, t0=0.0):
+        """Elastic response to q0 from rest at time t0."""
+        q_hat = self.fft(q0)
+        self.state = {"t": float(t0), "q_hat": q_hat, "mu_hat": self.elastic_potentials(q_hat)}
+        return self
+
+    def advance(self, q1, dt):
+        """Advance the current state by dt; the load changes linearly to q1."""
+        st = self.state
+        q1_hat = self.fft(q1)
+        st["mu_hat"] = self.step_hat(st["mu_hat"], st["q_hat"], q1_hat, dt)
+        st["q_hat"], st["t"] = q1_hat, st["t"] + dt
+        return self
+
+    @property
+    def w(self):
+        """Deflection of the current state (+ down) [m]."""
+        st = self.state
+        return self.ifft(self.deflection_hat(st["mu_hat"], st["q_hat"]))
+
+    @property
+    def mu(self):
+        """Moment potentials of the current state, shape (2, ny, nx)."""
+        return np.stack([self.ifft(m) for m in self.state["mu_hat"]])
+
+    def snapshot(self, stresses=True) -> xr.Dataset:
+        """The current state as a one-time Dataset."""
+        st = self.state
+        return plate_dataset(self, [st["t"]], self.w[None], self.ifft(st["q_hat"])[None],
+                             self.mu[None], stresses=stresses, model="SpectralPlate")
 
     # -- stresses ------------------------------------------------------------
     def surface_stress(self, mu):
         """Upper-surface stresses (sxx, syy, sxy) [Pa] from the two moment
         potentials ``mu`` (shape (2, ny, nx), e.g. ``result.mu[i]``)."""
+        mu = np.asarray(mu)
         m1, m2 = self.fft(mu[0]), self.fft(mu[1])
         kxx, kyy, kxy = -self.KX**2, -self.KY**2, -self.KX * self.KY
         mxx, myy, mxy = moments_from_potentials(kxx * m1, kyy * m1, kxx * m2, kyy * m2, kxy * m2)
@@ -269,11 +341,12 @@ class FDPlate:
     """
 
     def __init__(self, nx, ny, dx, shelf: IceShelf | None = None, edges="clamped",
-                 fixed=None, solver="lu", cg_rtol=1e-10):
+                 fixed=None, solver="lu", cg_rtol=1e-10, x=None, y=None):
         self.shelf = shelf if shelf is not None else IceShelf()
         if np.ndim(self.shelf.H) != 0:
             raise ValueError("FDPlate needs a uniform thickness")
         self.nx, self.ny, self.h = nx, ny, dx
+        self.x, self.y = _grid_coords(nx, dx, x), _grid_coords(ny, dx, y)
         ex, ey = (edges, edges) if isinstance(edges, str) else edges
         self.edges = (ex, ey)
         Tx, Ty = _second_difference(nx, dx, ex), _second_difference(ny, dx, ey)
@@ -390,7 +463,10 @@ class FDPlate:
         mu1[:, self.fixed.ravel()] = 0.0
         return w1, mu1
 
-    def run(self, t, load: Callable | np.ndarray, store=None):
+    def run(self, t, load: Callable | np.ndarray, store=None, stresses=True) -> xr.Dataset:
+        """Integrate through the times ``t`` (Crank-Nicolson; keep dt << tau).
+        ``load`` is a function q(t) or an array (nt, ny, nx).  Returns an
+        ``xarray.Dataset`` (see :func:`plate_dataset`)."""
         t = np.asarray(t, dtype=float)
         store = list(range(t.size)) if store is None else list(store)
         q_at = (lambda i: np.asarray(load(t[i]), float).ravel()) if callable(load) else \
@@ -410,11 +486,45 @@ class FDPlate:
                 W[j], Qs[j] = w.reshape(self.ny, self.nx), q.reshape(self.ny, self.nx)
                 MU[j] = mu.reshape(2, self.ny, self.nx)
                 j += 1
-        return Result2D(t[store], W, Qs, MU)
+        ds = plate_dataset(self, t[store], W, Qs, MU, stresses=stresses, model="FDPlate",
+                           dx=self.h, edges=str(self.edges), solver=self.solver)
+        ds["fixed"] = (("y", "x"), self.fixed, {"long_name": "nodes held at w = 0 (grounded or edge)"})
+        return ds
+
+    # -- step by step (for coupling to other models) -------------------------
+    def start(self, q0, t0=0.0):
+        """Elastic response to q0 from rest at time t0."""
+        q0 = np.asarray(q0, dtype=float)
+        w, mu = self.elastic(q0.reshape(self.ny, self.nx))
+        self.state = {"t": float(t0), "q": q0.ravel(), "w": w.ravel(),
+                      "mu": mu.reshape(2, self.nx * self.ny)}
+        return self
+
+    def advance(self, q1, dt):
+        """Advance the current state by dt to the load q1 (Crank-Nicolson)."""
+        st = self.state
+        q1 = np.asarray(q1, dtype=float).ravel()
+        st["w"], st["mu"] = self.step(st["w"], st["mu"], q1, dt)
+        st["q"], st["t"] = q1, st["t"] + dt
+        return self
+
+    @property
+    def w(self):
+        return self.state["w"].reshape(self.ny, self.nx)
+
+    @property
+    def mu(self):
+        return self.state["mu"].reshape(2, self.ny, self.nx)
+
+    def snapshot(self, stresses=True) -> xr.Dataset:
+        """The current state as a one-time Dataset."""
+        st = self.state
+        return plate_dataset(self, [st["t"]], self.w[None], st["q"].reshape(1, self.ny, self.nx),
+                             self.mu[None], stresses=stresses, model="FDPlate")
 
     def force_residual(self, w, mu, q):
         """lap^2 (mu_1 + mu_2) + k w - q on the free nodes (should be round-off)."""
-        r = self.Bih @ np.asarray(mu).reshape(2, -1).sum(axis=0) + self.k * w.ravel() - q.ravel()
+        r = self.Bih @ np.asarray(mu).reshape(2, -1).sum(axis=0) + self.k * np.ravel(w) - np.ravel(q)
         return r[self.free]
 
     def _second_derivatives(self, f):
@@ -430,6 +540,7 @@ class FDPlate:
     def surface_stress(self, mu):
         """Upper-surface stresses (sxx, syy, sxy) [Pa] from the two moment
         potentials ``mu`` (shape (2, ny, nx), e.g. ``result.mu[i]``)."""
+        mu = np.asarray(mu)
         a_xx, a_yy, _ = self._second_derivatives(mu[0])
         b_xx, b_yy, b_xy = self._second_derivatives(mu[1])
         mxx, myy, mxy = moments_from_potentials(a_xx, a_yy, b_xx, b_yy, b_xy)

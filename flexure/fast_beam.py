@@ -13,14 +13,18 @@ per-step overhead is removed in two ways:
                   pentadiagonal LU solve) with Numba, so a step costs a few
                   passes over the grid with no Python in between.
 
-Both take a separable load  q(x, t) = Q(x) f(t)  (f sampled at the times t).
-This covers lake filling and draining histories and keeps the loop tight.
+Both take a separable load  q(x, t) = Q(x) f(t)  (f sampled at the times t),
+which covers lake filling and draining histories and keeps the loop tight,
+and both return an ``xarray.Dataset`` like ``ViscoelasticBeam.run``.
 """
 from __future__ import annotations
 
 import numpy as np
 import scipy.sparse as sp
+import xarray as xr
 from scipy.linalg import lapack
+
+from viscoelastic_beam import beam_dataset
 
 try:
     import numba
@@ -64,8 +68,15 @@ def _setup(beam, dt):
     return S, A, c, a
 
 
-def run_banded(beam, t, Q, f):
-    """Time loop with a once-factorised LAPACK band LU.  Returns (w, M)."""
+def _as_dataset(beam, t, Q, f, W, M):
+    t = np.asarray(t, dtype=float)
+    q = np.asarray(f, float)[: W.shape[0], None] * np.asarray(Q, float)[None, :]
+    return beam_dataset(beam.x, t, q, W, M, beam.shelf, left=beam.left, right=beam.right)
+
+
+def run_banded(beam, t, Q, f) -> xr.Dataset:
+    """Time loop with a once-factorised LAPACK band LU.  Returns an
+    ``xarray.Dataset`` like ``ViscoelasticBeam.run``."""
     t = np.asarray(t, float)
     dt = t[1] - t[0]
     if not np.allclose(np.diff(t), dt):
@@ -93,7 +104,7 @@ def run_banded(beam, t, Q, f):
         Mp = c * (h * Mp + beam.Dp * _band_matvec(Lb, w1 - w, 1, 1)[None, :])
         w = w1
         W[i], Mm[i] = w, Mp.sum(axis=0)
-    return W, Mm
+    return _as_dataset(beam, t, Q, f, W, Mm)
 
 
 def _rhs_at(j, n, qj, Sb, Lsb, w, gM):
@@ -220,8 +231,9 @@ def _penta_lu(ab):
                           ab[3, :-1].copy(), ab[4, :-2].copy())
 
 
-def run_numba(beam, t, Q, f, store_every=1):
-    """Compiled time loop.  Returns (w, M) at every ``store_every``-th step."""
+def run_numba(beam, t, Q, f, store_every=1) -> xr.Dataset:
+    """Compiled time loop.  Returns an ``xarray.Dataset`` (like
+    ``ViscoelasticBeam.run``) at every ``store_every``-th step."""
     if not HAVE_NUMBA:
         raise ImportError("numba is not installed")
     t = np.asarray(t, float)
@@ -234,8 +246,10 @@ def run_numba(beam, t, Q, f, store_every=1):
     lo1, lo2, u0, u1, u2 = _penta_lu(_bands(A, 2, 2))
     w0, M0 = beam.elastic(Q * f[0])
     Mp0 = beam.split_moment(M0)
-    return _loop(np.asarray(Q, float), np.asarray(f, float), w0, Mp0[0].copy(), Mp0[1].copy(),
+    W, M = _loop(np.asarray(Q, float), np.asarray(f, float), w0, Mp0[0].copy(), Mp0[1].copy(),
                  _bands(S, 2, 2), _bands(beam.L, 1, 1), _bands(beam.Lstar, 1, 1),
                  beam.active.astype(float), lo1, lo2, u0, u1, u2,
                  np.ascontiguousarray(beam.Dp[0]), np.ascontiguousarray(beam.Dp[1]),
                  float(c[0, 0]), float(a[0, 0]), float(c[1, 0]), float(a[1, 0]), store_every)
+    keep = np.arange(0, t.size, store_every)[: W.shape[0]]
+    return _as_dataset(beam, t[keep], Q, np.asarray(f, float)[keep], W, M)

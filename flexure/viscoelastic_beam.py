@@ -57,6 +57,7 @@ from typing import Callable, Sequence
 
 import numpy as np
 import scipy.sparse as sp
+import xarray as xr
 from scipy.sparse.linalg import splu
 
 SECONDS_PER_DAY = 86400.0
@@ -189,20 +190,39 @@ def force_operator(n: int, dx: float, left: str, right: str) -> sp.csr_matrix:
 # ---------------------------------------------------------------------------
 # The model
 # ---------------------------------------------------------------------------
-@dataclass
-class Result:
-    """Output of :meth:`ViscoelasticBeam.run` (rows = time, columns = x)."""
+def shelf_attrs(shelf: IceShelf) -> dict:
+    """The shelf parameters as plain numbers, for xarray attributes."""
+    a = {k: float(getattr(shelf, k)) for k in
+         ("E", "nu", "nu_v", "eta", "rho_i", "rho_sw", "rho_w", "g")}
+    if np.ndim(shelf.H) == 0:
+        a.update(H=float(shelf.H), D=float(shelf.D), ell=float(shelf.ell))
+    t1, t2 = np.ravel(shelf.taus[0])[0], np.ravel(shelf.taus[1])[0]
+    a.update(k=float(shelf.k), tau=float(np.ravel(shelf.tau)[0]), tau_1=float(t1), tau_2=float(t2))
+    return a
 
-    x: np.ndarray       # [m]
-    t: np.ndarray       # [s]
-    q: np.ndarray       # load [Pa]
-    w: np.ndarray       # deflection, positive down [m]
-    M: np.ndarray       # total bending moment M1 + M2 [N]
-    sigma: np.ndarray   # upper-surface bending stress, + = tension [Pa]
 
-    @property
-    def t_days(self) -> np.ndarray:
-        return self.t / SECONDS_PER_DAY
+VAR_ATTRS = {
+    "w": {"units": "m", "long_name": "deflection (positive downwards)"},
+    "q": {"units": "Pa", "long_name": "surface load (positive downwards)"},
+    "M": {"units": "N", "long_name": "bending moment per unit width"},
+    "sigma": {"units": "Pa", "long_name": "upper-surface bending stress (positive = tension)"},
+}
+
+
+def beam_dataset(x, t, q, w, M, shelf: IceShelf, **attrs) -> xr.Dataset:
+    """Package a 1-D run as an ``xarray.Dataset`` with dims (time, x)."""
+    t = np.asarray(t, dtype=float)
+    ds = xr.Dataset(
+        {name: (("time", "x"), np.asarray(val), VAR_ATTRS[name]) for name, val in
+         (("w", w), ("q", q), ("M", M), ("sigma", shelf.surface_stress(np.asarray(M))))},
+        coords={"time": ("time", t, {"units": "s"}),
+                "time_days": ("time", t / SECONDS_PER_DAY, {"units": "days"}),
+                "x": ("x", np.asarray(x, dtype=float), {"units": "m"})},
+        attrs={**shelf_attrs(shelf), **attrs},
+    )
+    if np.ndim(shelf.H) != 0:
+        ds["H"] = ("x", np.asarray(shelf.H, dtype=float), {"units": "m", "long_name": "ice thickness"})
+    return ds
 
 
 class ViscoelasticBeam:
@@ -317,15 +337,40 @@ class ViscoelasticBeam:
         Mp1 = c * ((1.0 - 0.5 * a) * Mp0 + self.Dp * (self.L @ (w1 - w0))[None, :])
         return w1, Mp1
 
+    # -- step by step (for coupling to other models) -----------------------
+    def start(self, q0, w0=None, Mp0=None, t0=0.0):
+        """Set the state at time t0: elastic response to q0 from rest, unless
+        a deflection ``w0`` (and moment parts ``Mp0``) is given."""
+        q0 = np.asarray(q0, dtype=float)
+        if w0 is None:
+            w, M = self.elastic(q0)
+            Mp = self.split_moment(M)
+        else:
+            w = np.asarray(w0, dtype=float)
+            Mp = Mp0 if Mp0 is not None else self.Dp * (self.L @ w)[None, :]
+        self.state = {"t": float(t0), "q": q0, "w": w, "Mp": Mp}
+        return self.state
+
+    def advance(self, q1, dt):
+        """Advance the current state by dt to the new load q1 (Crank-Nicolson)."""
+        st = self.state
+        w, Mp = self.step(st["w"], st["Mp"], np.asarray(q1, dtype=float), dt)
+        self.state = {"t": st["t"] + dt, "q": np.asarray(q1, dtype=float), "w": w, "Mp": Mp}
+        return self.state
+
     # -- a whole simulation -------------------------------------------------
     def run(self, t: Sequence[float], load: Callable[[float], np.ndarray] | np.ndarray,
-            w0: np.ndarray | None = None, Mp0: np.ndarray | None = None) -> Result:
-        """Integrate from t[0] to t[-1].
+            w0: np.ndarray | None = None, Mp0: np.ndarray | None = None) -> xr.Dataset:
+        """Integrate from t[0] to t[-1]; returns an ``xarray.Dataset``.
 
         ``load`` is either a function ``q(t)`` returning the load [Pa] on the
         grid, or an array of shape (len(t), len(x)).  The shelf starts unloaded
         and at rest (w = M = 0) unless ``w0``/``Mp0`` are given; the load at
         t[0] is applied elastically at the first instant.
+
+        The Dataset has dims (time, x), coordinates ``time`` [s] and
+        ``time_days``, variables ``w``, ``q``, ``M`` and ``sigma``, and the
+        shelf parameters as attributes.
         """
         t = np.asarray(t, dtype=float)
         qfun = load if callable(load) else (lambda _t, _i=iter(np.asarray(load)): next(_i))
@@ -348,7 +393,8 @@ class ViscoelasticBeam:
             W[i], Mp = self.step(W[i - 1], Mp, Q[i], t[i] - t[i - 1])
             Mm[i] = Mp.sum(axis=0)
 
-        return Result(self.x, t, Q, W, Mm, self.shelf.surface_stress(Mm))
+        return beam_dataset(self.x, t, Q, W, Mm, self.shelf, left=self.left, right=self.right,
+                            model="ViscoelasticBeam")
 
 
 # ---------------------------------------------------------------------------

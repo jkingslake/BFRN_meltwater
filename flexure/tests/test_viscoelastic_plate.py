@@ -95,7 +95,7 @@ def test_fd_force_balance_holds_exactly():
     for i in range(t.size):
         r = fd.force_residual(res.w[i], res.mu[i], res.q[i])
         assert np.max(np.abs(r)) < 1e-8 * Q.max()
-    assert np.all(res.w[:, fixed] == 0)
+    assert np.all(res.w.values[:, fixed] == 0)
 
 
 def test_moment_tensor_has_the_right_poisson_ratios():
@@ -133,6 +133,22 @@ def test_moment_tensor_has_the_right_poisson_ratios():
     assert all(np.abs(a - b).max() / np.abs(M_law[0]).max() < 1e-4 for a, b in zip(M_model, M_law))
 
 
+def test_outputs_are_xarray_and_steppers_match_run():
+    n, dx = 64, 100.0
+    _, Q = circular_lake(n, dx)
+    x = (np.arange(n) - n / 2) * dx
+    for plate in (SpectralPlate(n, n, dx, SHELF, x=x, y=x), FDPlate(n, n, dx, SHELF, edges="periodic", x=x, y=x)):
+        ds = plate.run([0.0, 0.5 * DAY, 1.0 * DAY], lambda _: Q)
+        assert set(ds.w.dims) == {"time", "y", "x"} and "sigma1" in ds and "time_days" in ds.coords
+        assert np.allclose(ds.x, x) and ds.attrs["nu_v"] == SHELF.nu_v
+        plate.start(Q)
+        plate.advance(Q, 0.5 * DAY)
+        plate.advance(Q, 0.5 * DAY)
+        assert np.allclose(plate.w, ds.w[-1].values, rtol=1e-10, atol=1e-12)
+        snap = plate.snapshot()
+        assert np.allclose(snap.sigma1[0], ds.sigma1[-1], rtol=1e-8, atol=1e-6)
+
+
 def test_cg_and_lu_agree():
     n, dx = 80, 60.0
     _, Q = circular_lake(n, dx)
@@ -159,9 +175,9 @@ def test_fast_beam_loops_match_reference(left, right):
     t = np.linspace(0, 20 * DAY, 201)
     f = fill_hold_drain(t, 5 * DAY, 5 * DAY, 0.5 * DAY)
     ref = beam.run(t, lambda tt: Q * fill_hold_drain(tt, 5 * DAY, 5 * DAY, 0.5 * DAY))
-    Wb, _ = fast_beam.run_banded(beam, t, Q, f)
-    assert np.max(np.abs(Wb - ref.w)) / np.abs(ref.w).max() < 1e-7
+    rb = fast_beam.run_banded(beam, t, Q, f)
+    assert float(np.max(np.abs(rb.w - ref.w)) / np.abs(ref.w).max()) < 1e-7
     if fast_beam.HAVE_NUMBA:
-        Wn, Mn = fast_beam.run_numba(beam, t, Q, f)
-        assert np.max(np.abs(Wn - ref.w)) / np.abs(ref.w).max() < 1e-7
-        assert np.max(np.abs(Mn - ref.M)) / np.abs(ref.M).max() < 1e-7
+        rn = fast_beam.run_numba(beam, t, Q, f)
+        assert float(np.max(np.abs(rn.w - ref.w)) / np.abs(ref.w).max()) < 1e-7
+        assert float(np.max(np.abs(rn.M - ref.M)) / np.abs(ref.M).max()) < 1e-7
