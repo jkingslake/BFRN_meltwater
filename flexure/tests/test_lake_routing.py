@@ -9,6 +9,7 @@ import sys
 import numpy as np
 import pytest
 import xarray as xr
+from scipy import ndimage as ndi
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import lake_routing as lr  # noqa: E402
@@ -144,3 +145,31 @@ def test_coupled_loop_conserves_water_and_rigid_loop_matches_static_routing():
     c = lr.route_with_flexure(dem, melt, t, plate=p)
     assert np.allclose(c.water_stored + c.water_lost, c.melt_added, rtol=1e-9)
     assert float(c.max_deflection[-1]) > 0
+
+
+@needs_fsm
+def test_saved_lakes_are_flat_and_saving_maps_does_not_change_the_run():
+    """Each saved water depth is in equilibrium with the saved surface, so
+    surface + water_depth is flat across every lake, even while the shelf
+    sags; and saving maps (one extra routing each) leaves the run unchanged."""
+    g, X, Y = grid(80, 50.0)
+    z = 20 + 0.01 * X + 0.3 * (np.hypot(X - 500, Y) / 300) ** 2
+    z[[0, -1], :] = z[:, [0, -1]] = 0.0
+    dem = g.copy(data=z)
+    melt = lambda i: xr.full_like(dem, 0.3)
+    t = np.arange(8) * DAY
+    floating = xr.ones_like(dem, dtype=bool)
+    run = lambda store: lr.route_with_flexure(
+        dem, melt, t, plate=ShelfPlate(dem, floating, SHELF, coarsen=2).start(), store=store)
+    every = run(None)
+    assert float(every.max_deflection[-1]) > 1.0          # the shelf really does move
+    for i in range(1, t.size):                            # (no water at the start)
+        e = every.isel(time=i)
+        lab, n = ndi.label(e.water_depth.values > 1e-6)
+        level = (e.surface + e.water_depth).values
+        assert n > 0 and all(np.ptp(level[lab == k]) < 1e-5 for k in range(1, n + 1))
+    assert np.allclose(every.water_stored + every.water_lost, every.melt_added, rtol=1e-9)
+    last = run([t.size - 1])
+    assert np.allclose(every.max_deflection, last.max_deflection, rtol=1e-9, atol=1e-12)
+    assert np.allclose(every.water_depth[-1], last.water_depth[-1], atol=1e-9)
+    assert np.isclose(float(every.water_lost[-1]), float(last.water_lost[-1]), rtol=1e-9, atol=1e-6)

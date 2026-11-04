@@ -121,7 +121,9 @@ resp = drain_lake(plate, water.where(labels == lake, 0), [0.5 * DAY, 30 * DAY, 3
 resp.uplift                                    # (time, y, x) uplift after drainage [m]
 ```
 
-Outputs written by the notebooks go to `outputs/`, which git ignores.
+In the coupled runs (`route_with_flexure`), `surface` is the ice surface (DEM minus deflection) and each saved
+`water_depth` is in equilibrium with it at the same instant, so `surface + water_depth` is the water-surface
+elevation. Outputs written by the notebooks go to `outputs/`, which git ignores.
 
 ## Numerics in brief
 

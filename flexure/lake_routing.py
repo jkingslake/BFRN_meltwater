@@ -438,7 +438,14 @@ def route_with_flexure(dem: xr.DataArray, melt: Callable[[int], xr.DataArray], t
 
     Returns an ``xarray.Dataset``.  Maps on the routing grid with dims
     (time, y, x) are kept at the indices ``store`` (default all):
-    ``water_depth``, ``deflection`` and ``surface``.  Time series on the full
+    ``water_depth``, ``deflection`` and ``surface`` (= dem - deflection, the
+    ice surface).  Each saved map shows the water in equilibrium with the
+    saved surface at the same instant: before saving, the water is routed
+    once more over the surface the plate has just reached (and ``water0``
+    over the starting surface).  So ``surface + water_depth`` is the
+    elevation of the water surface, and lakes in it are flat.  Fill-spill-merge
+    is path-independent, so this extra routing does not change the run; any
+    water it sends off the domain is counted as lost at that step.  Time series on the full
     time axis ``step_time``: melt added, water stored, water lost, the
     largest deflection, and (if ``track`` = {name: boolean mask} is given) the
     water volume inside each mask, ``tracked_volume``.
@@ -455,24 +462,34 @@ def route_with_flexure(dem: xr.DataArray, melt: Callable[[int], xr.DataArray], t
     track = track or {}
     masks = [np.asarray(m, bool) for m in track.values()]
     tracked = np.zeros((nt, len(masks)))
-    tracked[0] = [float(water.values[m].sum()) * a for m in masks]
-    stored[0] = float(water.sum()) * a
-    wmax[0] = float(w.max())
 
-    def keep(i, water, w):
+    def surface_of(w):
+        return (dem - w).where(dem > ocean_level, dem)      # outlets stay outlets
+
+    def settle(water, w):
+        """Route the water again over the current surface, so that it is in
+        equilibrium with it.  Returns the water and the volume that left."""
+        before = float(water.sum())
+        water = route(surface_of(w), water, ocean_level)
+        return water, (before - float(water.sum())) * a
+
+    def record(i, water, w):
+        stored[i] = float(water.sum()) * a
+        tracked[i] = [float(water.values[m_].sum()) * a for m_ in masks]
+        wmax[i] = float(w.max())
         if i in store:
             j = store.index(i)
-            Wd[j], Wf[j], S[j] = water.values, w.values, (dem - w).where(dem > ocean_level, dem).values
+            Wd[j], Wf[j], S[j] = water.values, w.values, surface_of(w).values
 
-    keep(0, water, w)
+    if water0 is not None:                                   # water0 may come from another surface
+        water, lost[0] = settle(water, w)
+    record(0, water, w)
     for i in range(nt - 1):
         dt = times[i + 1] - times[i]
         m = melt(i)
         inp = water + m
-        surface = (dem - w).where(dem > ocean_level, dem)   # outlets stay outlets
-        water = route(surface, inp, ocean_level)
+        water = route(surface_of(w), inp, ocean_level)
         added[i + 1] = added[i] + float(m.sum()) * a
-        stored[i + 1] = float(water.sum()) * a
         lost[i + 1] = lost[i] + (float(inp.sum()) - float(water.sum())) * a
         if plate is not None:
             q = plate.load(water if reference_water is None else water - reference_water)
@@ -480,9 +497,10 @@ def route_with_flexure(dem: xr.DataArray, melt: Callable[[int], xr.DataArray], t
                 q = q + extra_load(times[i + 1])
             plate.advance(q, dt, substeps)
             w = plate.deflection()
-        wmax[i + 1] = float(w.max())
-        tracked[i + 1] = [float(water.values[m].sum()) * a for m in masks]
-        keep(i + 1, water, w)
+            if i + 1 in store:                               # bring the saved water up to date
+                water, spilt = settle(water, w)
+                lost[i + 1] += spilt
+        record(i + 1, water, w)
         if verbose and (i + 1) % 10 == 0:
             print(f"  day {times[i + 1] / DAY:6.1f}: stored {stored[i + 1] / 1e6:8.1f} Mm3, "
                   f"lost {lost[i + 1] / 1e6:8.1f} Mm3, max deflection {wmax[i + 1]:6.2f} m")
