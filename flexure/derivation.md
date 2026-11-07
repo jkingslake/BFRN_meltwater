@@ -246,6 +246,97 @@ $M = \Lambda\big[(1-\nu_v)\dot{\boldsymbol\kappa} + \nu_v\,\mathrm{tr}(\dot{\bol
 For $\nu_v=\tfrac12$ this is exactly the viscous bending law used by MacAyeal
 et al. (2021) and Bézu et al. (2025).
 
+### Relation to MacAyeal, Sergienko & Banwell (2015)
+
+MacAyeal et al. (2015) wrote down the thin-plate viscoelastic model of
+ice-shelf flexure under meltwater lakes, motivated by the 2002 break-up of the
+Larsen B Ice Shelf. Physically, the model in this document is the same one.
+
+**Same framework.** One bending-moment field drives an elastic spring and a
+viscous dashpot in series, and the plate floats on sea water. Their
+"buoyancy bucket" is our bed of springs, $k=\rho_{sw}g$.
+
+**Same plate laws.** They split the curvature
+$\mathbf H = (\kappa_{xx}, \kappa_{yy}, \kappa_{xy})$ into elastic and viscous
+parts, driven by the same moment $\mathbf M = (M_{xx}, M_{yy}, M_{xy})$:
+
+$$
+\dot{\mathbf H} = \mathbf D^{-1}\dot{\mathbf M} + \mathbf V^{-1}\mathbf M,
+\qquad
+\mathbf D = D\begin{pmatrix}1&\nu&0\\ \nu&1&0\\ 0&0&1-\nu\end{pmatrix},
+\qquad
+\mathbf V = \Lambda\begin{pmatrix}1&\tfrac12&0\\ \tfrac12&1&0\\ 0&0&\tfrac12\end{pmatrix}.
+$$
+
+This is their eqs 17–19. It is written here in our notation and sign
+convention: their displacement is positive upwards, their viscosity is our
+$\eta$, and $\Lambda=\eta H^3/3$. $\mathbf D$ is our elastic plate law, and
+$\mathbf V$ is our viscous plate law with $\nu_v=\tfrac12$.
+
+**Our two relaxation times are their equation, diagonalised.** $\mathbf D$
+and $\mathbf V$ share three eigenvectors: isotropic bending $(1,1,0)$,
+deviatoric bending $(1,-1,0)$ and twist $(0,0,1)$. Their eigenvalues are
+$D(1+\nu)$, $D(1-\nu)$, $D(1-\nu)$ and $\Lambda(1+\nu_v)$,
+$\Lambda(1-\nu_v)$, $\Lambda(1-\nu_v)$. In that basis the matrix equation
+falls apart into independent Maxwell elements, $\dot M = d\,\dot\kappa - M/\tau$,
+with
+
+$$
+\tau_1 = \frac{\Lambda(1+\nu_v)}{D(1+\nu)}\ \ \text{(isotropic)},\qquad
+\tau_2 = \frac{\Lambda(1-\nu_v)}{D(1-\nu)}\ \ \text{(deviatoric and twist)},
+$$
+
+which are the times of (2′). Any model with one moment field and two
+Poisson's ratios therefore has two relaxation times; (2′) just makes them
+explicit.
+
+**Their experiment, rerun.** They filled a circular lake, 500 m in radius
+and 2 m deep, on a 200 m thick shelf ($E = 10$ GPa, $\nu = 0.3$) over 60
+days, drained it in 6 hours, and followed the shelf for a year. Their ice
+obeys Glen's law with $n=3$. The table repeats this with `SpectralPlate`
+(a 25.6 km periodic box at 50 m, exact in time) for three constant
+viscosities. It gives the depression at the lake centre; their values are
+read from their Figs 4 and 5.
+
+| | day 60 (full) | just after drainage | day 365 |
+|---|---|---|---|
+| MacAyeal et al. (2015), Glen's law $n=3$ | 58 cm | 36 cm | 19 cm |
+| this model, $\eta = 5\times10^{13}$ Pa s | 150 cm | 126 cm | 0.4 cm |
+| this model, $\eta = 3\times10^{14}$ Pa s | 83 cm | 63 cm | 4.0 cm |
+| this model, $\eta = 2\times10^{15}$ Pa s | 41 cm | 21 cm | 3.5 cm |
+
+The elastic jump when the water leaves agrees. Ours is the purely elastic
+response to the lake, 19.8 cm, plus up to 4 cm of creep during the 6 hours
+of drainage when $\eta$ is low; theirs is about 22 cm. The recovery does not
+agree. With a constant viscosity the centre recovers to within a few
+centimetres over the following year, and no single value of $\eta$ matches
+both their filling and their recovery. Under Glen's law the effective
+viscosity rises as the stresses fall, so their recovery stalls with 19 cm
+still to go. Their suggestion that repeated fill–drain cycles deepen lake
+basins year after year therefore rests on the nonlinear rheology.
+
+**Differences.**
+
+* *Rheology.* They offer Glen's law, through an effective viscosity built
+  from the invariants of $\mathbf M$ (their eqs 39–40). Here $\eta$ is
+  constant (see §13).
+* *Parameters.* They take $E = 10$ GPa; here $E = 1$ GPa, from tidal
+  flexure. For the same $\eta$ that makes $\ell$ about 1.8 times shorter and
+  $\tau$ 10 times longer.
+* *Unknowns and numerics.* They solve for $\mathbf M$, the viscous
+  curvature and the deflection (seven unknowns) with COMSOL finite elements,
+  and demonstrate one axisymmetric lake with a simply supported edge at
+  $r = 10$ km. Here the 1-D beam uses the scheme of §11. The 2-D plates carry
+  two scalar moment potentials instead of the tensor (see
+  [`viscoelastic_plate.py`](viscoelastic_plate.py)), solved by finite
+  differences with grounded ice held fixed, or by FFTs exactly in time.
+* *Thickness.* Their tensor form takes spatially varying thickness and
+  viscosity as it stands. The moment potentials need a uniform rigidity in
+  2-D (see §13).
+* *Scope.* They study one idealised lake for one year. Here lakes are routed
+  by fill-spill-merge on real REMA surfaces, with grounding lines, and the
+  routing can be coupled to the flexure.
+
 ---
 
 ## 6. The master equation
@@ -541,12 +632,21 @@ run with `python -m pytest -q`) checks the model against exact solutions:
 
 ## 13. Limitations and easy extensions
 
-* **Lake–flexure feedback.** Here the water depth is prescribed. In reality the
-  lake sits in the depression it creates. Coupling the model to the
-  fill-spill-merge routing in [`../python`](../python) would let water and ice
-  shape each other.
-* **Variable thickness.** This already works: pass `H` as an array. Both $D$
-  and $\Lambda$ scale as $H^3$, so $\tau$ is unchanged.
+* **Lake–flexure feedback.** In this document the water depth is prescribed.
+  In reality the lake sits in the depression it creates. The routing
+  notebooks couple the plate to fill-spill-merge, so water and ice shape each
+  other:
+  * [`lake_drainage_flexure.ipynb`](lake_drainage_flexure.ipynb) drains a
+    routed lake;
+  * [`coupled_routing_flexure.ipynb`](coupled_routing_flexure.ipynb) routes a
+    melt season over the flexing shelf;
+  * [`drainage_reorganisation.ipynb`](drainage_reorganisation.ipynb) follows
+    where the next summer's water goes after a lake drains.
+* **Variable thickness.** In 1-D this already works: pass `H` as an array.
+  Both $D$ and $\Lambda$ scale as $H^3$, so $\tau$ is unchanged. The 2-D plates
+  need a uniform thickness, because their moment potentials assume a uniform
+  rigidity. Carrying the moment tensor instead, as MacAyeal et al. (2015) do,
+  removes that restriction at about the same cost.
 * **Lakes in map view.** This is implemented in
   [`viscoelastic_plate.py`](viscoelastic_plate.py): the same physics with
   $\partial^4/\partial x^4 \to \nabla^4$ gives a viscoelastic plate. A round
@@ -555,7 +655,9 @@ run with `python -m pytest -q`) checks the model against exact solutions:
 * **Nonlinear (Glen's law) creep and depth-varying temperature.** Here
   $\eta$ depends on stress and depth, so $\Lambda$ becomes a function of the
   state. The moment update becomes a local nonlinear update; the solve stays
-  the same.
+  the same. MacAyeal et al. (2015, eqs 39–40) give a ready-made effective
+  viscosity in terms of the bending moments. It is what keeps their lake basin
+  from recovering after drainage (§5).
 * **Membrane stresses and ice-shelf flow.** These are neglected, which is fine
   for bending over days to weeks. For coupled flow and flexure see
   MacAyeal et al. (2021).
@@ -590,6 +692,7 @@ and $\tau \propto \eta/E$, it is easy to rescale the results.
 * Hetényi, M. (1946). *Beams on Elastic Foundation*. University of Michigan Press.
 * Holdsworth, G. (1969). Flexure of a floating ice tongue. *Journal of Glaciology*, 8(54), 385–397.
 * MacAyeal, D. R., & Sergienko, O. V. (2013). The flexural dynamics of melting ice shelves. *Annals of Glaciology*, 54(63), 1–10.
+* MacAyeal, D. R., Sergienko, O. V., & Banwell, A. F. (2015). A model of viscoelastic ice-shelf flexure. *Journal of Glaciology*, 61(228), 635–645. doi:10.3189/2015JoG14J169
 * MacAyeal, D. R., Sergienko, O. V., Banwell, A. F., Macdonald, G. J., Willis, I. C., & Stevens, L. A. (2021). Treatment of ice-shelf evolution combining flow and flexure. *Journal of Glaciology*, 67(265), 885–902.
 * Reeh, N., Christensen, E. L., Mayer, C., & Olesen, O. B. (2003). Tidal bending of glaciers: a linear viscoelastic approach. *Annals of Glaciology*, 37, 83–89.
 * Turcotte, D. L., & Schubert, G. (2014). *Geodynamics* (3rd ed.). Cambridge University Press.
