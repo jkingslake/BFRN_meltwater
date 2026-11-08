@@ -16,12 +16,13 @@ a step-by-step derivation with diagrams and a narrated explainer video.
 | **Lake drainage** | [`lake_drainage_flexure.ipynb`](lake_drainage_flexure.ipynb): fill a REMA surface with fill-spill-merge, choose a lake, drain it and record how the shelf flexes back up (unloading only), saved as xarray/NetCDF |
 | **Routing on a flexing shelf** | [`coupled_routing_flexure.ipynb`](coupled_routing_flexure.ipynb): fill-spill-merge and the plate run together through a melt season, each moving the other, compared with routing on a rigid shelf |
 | **Drainage reorganisation** | [`drainage_reorganisation.ipynb`](drainage_reorganisation.ipynb): after a lake drains and the shelf rebounds, does next summer's water go back into the old basin or get redirected? (after Warner et al. 2021) |
+| **Idealised lake basins** | [`basins/`](basins): a minimal model of lake-basin flexure, drainage-system growth and reset (single basin, multi-year refreezing, chains of basins; exact viscous-layer relaxation times), with the notebook [`basins/lake_basin_experiments.ipynb`](basins/lake_basin_experiments.ipynb) |
 | **Routing glue** | [`lake_routing.py`](lake_routing.py): DEM and mask loading, calls to the fill-spill-merge wrapper, lake labelling, a plate under the routing grid, the drainage and coupled experiments, drainage basins and overflow routes |
 | **Model (1-D)** | [`viscoelastic_beam.py`](viscoelastic_beam.py): one file, NumPy and SciPy only. [`fast_beam.py`](fast_beam.py): the same time loop using banded LAPACK or Numba (5–20× less overhead per step) |
 | **Model (2-D plate)** | [`viscoelastic_plate.py`](viscoelastic_plate.py): `SpectralPlate` (periodic, FFT, exact in time) and `FDPlate` (finite differences with clamped edges and a grounded-ice mask; sparse LU or preconditioned CG) |
 | **Worked examples** | [`run_examples.py`](run_examples.py): writes the result figures in `figures/` |
 | **Diagrams** | [`make_diagrams.py`](make_diagrams.py): writes the schematic figures in `figures/diagram_*.png` |
-| **Tests** | [`tests/`](tests): 32 checks, mostly against exact solutions (beam: Hetényi, grounding line, free edge, Fourier modes, convergence; plate: Kelvin-function point load, beam limit, solver agreement, exact time integration, force balance; routing glue: volume conservation, rebound towards isostasy, restarts, drainage basins and overflow routes, water budgets of the coupled loop) |
+| **Tests** | [`tests/`](tests): 52 checks, mostly against exact solutions (beam: Hetényi, grounding line, free edge, Fourier modes, convergence; plate: Kelvin-function point load, beam limit, solver agreement, exact time integration, force balance; routing glue: volume conservation, rebound towards isostasy, restarts, drainage basins and overflow routes, water budgets of the coupled loop; idealised basins: analytic overtopping, both relaxation-time limits from the exact layer solution, the ratchet, mass conservation) |
 
 ## The model in one equation
 
@@ -57,7 +58,7 @@ pip install numpy scipy matplotlib pytest
 cd flexure
 python viscoelastic_beam.py   # parameters and a timing demo
 python run_examples.py        # figures/*.png
-python -m pytest -q           # 32 tests (the routing ones skip without fill-spill-merge)
+python -m pytest -q           # 52 tests (the routing ones skip without fill-spill-merge)
 ```
 
 ```python
