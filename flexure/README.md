@@ -144,6 +144,14 @@ elevation. Outputs written by the notebooks go to `outputs/`, which git ignores.
   unconditionally stable, and the discrete force balance holds to round-off
   at every step.
 
+## Verification against other codes
+
+[`verification/cross_verification.ipynb`](verification/cross_verification.ipynb) compares the solvers with GMT
+`grdflexure` and gFlex. Uniform-thickness viscoelastic flexure matches GMT to 2e-7 of the peak over a
+fill–hold–drain history. The finite-difference interior matches gFlex to round-off, and to second order with varying
+thickness. The stair-stepped grounding line in `FDPlate` is first order: expect 2–6% error at a 128 m grid (ℓ ≈ 900 m).
+Use dx ≲ ℓ/20 near grounding lines when that matters. See [`verification/README.md`](verification/README.md).
+
 ## Rebuilding the video
 
 ```bash
