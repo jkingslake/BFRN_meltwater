@@ -100,14 +100,14 @@ or tell `lake_routing.py` where it is:
 
 ```bash
 export FILLSPILLMERGE_PATH=/path/to/fillspillmerge   # the folder holding fillspillmerge/ and build/
-pip install rioxarray numba                          # numba is optional (fast drainage basins)
+pip install rioxarray geopandas numba                # numba is optional (fast drainage basins)
+export EARTHDATA_TOKEN=...                           # for the grounding line (below); optional
 ```
 
 `lake_routing.py` also looks next to this repository, in `../fillspillmerge`
 and `../fsm_pywrapper/fillspillmerge`. The notebooks use the 32 m REMA subset
 `python/notebooks/rema_subsets/dem_small_2.tif`, averaged to 64 m for routing,
-with a 128 m plate underneath and the grounded ice of
-`data/Mask_Antarctica_v02.tif` held fixed. On this DEM the wrapper reproduces
+with a 128 m plate underneath and the grounded ice held fixed. On this DEM the wrapper reproduces
 the repository's reference result `fsm_results/rema_tests/test-wtd.tif` to
 within float32 rounding.
 
@@ -143,6 +143,23 @@ elevation. Outputs written by the notebooks go to `outputs/`, which git ignores.
 * **Accuracy.** The scheme is second order in $\Delta x$ and $\Delta t$ and
   unconditionally stable, and the discrete force balance holds to round-off
   at every step.
+
+## The grounding line
+
+`floating_mask(grid)` decides where the plate is clamped. By default it burns the ice-boundary polygons of
+**MEaSUREs Antarctic Boundaries v2** (NSIDC-0709; Mouginot, Scheuchl & Rignot 2017) onto the grid. Their grounding
+line is the InSAR line of Rignot et al. (NSIDC-0498). The files (~3 MB) download on first use into
+`data/measures_boundaries_v2/`, which needs a free NASA Earthdata user token in `$EARTHDATA_TOKEN` (make one at
+urs.earthdata.nasa.gov, "Generate Token"). Without it, or with `source="measures_raster"`, the 500 m raster of the
+same product (`data/Mask_Antarctica_v02.tif`) is used instead, with a warning.
+
+[`verification/grounding_line_check.ipynb`](verification/grounding_line_check.ipynb) scores both, and the SCAR ADD
+v7.13 coastline, against ICESat-2 grounding-zone points (Li et al. 2022). On Nivlisen:
+* the vector mask follows the InSAR line closely: 88% of its grounding-line cells are within 100 m, against 60% for
+  the raster, and it changes about 2% of the shelf;
+* ADD is off by ~5 km in places;
+* all MEaSUREs masks sit a median ~300 m from ICESat-2's landward flexure limit. Treat the grounding line as
+  uncertain by a few hundred metres.
 
 ## Verification against other codes
 

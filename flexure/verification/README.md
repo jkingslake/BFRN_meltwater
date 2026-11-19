@@ -8,7 +8,10 @@ codes written by other people:
 * **gFlex** (Wickert 2016, v1.3.0, GPL-3.0): finite-difference elastic flexure
   with variable thickness and a choice of edge conditions.
 
-Start with [`cross_verification.ipynb`](cross_verification.ipynb). The fast,
+[`grounding_line_check.ipynb`](grounding_line_check.ipynb) checks the grounding-line
+mask against ICESat-2 (see the main README, "The grounding line").
+
+For the solvers, start with [`cross_verification.ipynb`](cross_verification.ipynb). The fast,
 coarse versions of the same checks are in
 [`../tests/test_cross_verification.py`](../tests/test_cross_verification.py),
 and are skipped if GMT or gFlex is missing.

@@ -160,14 +160,109 @@ def load_dem(path, coarsen: int = 1, ocean_edges: bool = True, ocean_level: floa
     return dem.rename("dem")
 
 
-def floating_mask(grid: xr.DataArray, mask_path=REPO / "data" / "Mask_Antarctica_v02.tif",
-                  floating_value: int = 125) -> xr.DataArray:
-    """True where the ice is floating, sampled (nearest) from a mask raster on
-    the same projection (default: the 500 m mask in ``data/``, where 125 is
-    floating and 255 grounded)."""
+MEASURES_URL = ("https://data.nsidc.earthdatacloud.nasa.gov/nsidc-cumulus-prod-protected/"
+                "MEASURES/NSIDC-0709/2/1992/02/07/")
+MEASURES_DIR = REPO / "data" / "measures_boundaries_v2"
+MEASURES_FILE = "IceBoundaries_Antarctica_v02"
+
+
+def _earthdata_token() -> str | None:
+    """An Earthdata user token from ``$EARTHDATA_TOKEN``, else the password
+    field of the ``urs.earthdata.nasa.gov`` entry in ``~/.netrc`` (a token can
+    be stored there), else None (a proxy may add the header itself)."""
+    tok = os.environ.get("EARTHDATA_TOKEN")
+    if tok:
+        return tok
+    with contextlib.suppress(Exception):
+        import netrc
+        auth = netrc.netrc().authenticators("urs.earthdata.nasa.gov")
+        if auth and auth[2] and auth[2].count(".") == 2:      # a JWT, not a password
+            return auth[2]
+    return None
+
+
+def fetch_measures_boundaries(dest: Path = MEASURES_DIR) -> Path:
+    """Download the MEaSUREs Antarctic Boundaries v2 ice-boundary polygons
+    (NSIDC-0709; Mouginot, Scheuchl & Rignot 2017, doi:10.5067/AXE4121732AD)
+    into ``dest`` if they are not there yet, and return the .shp path.
+
+    NSIDC needs a free NASA Earthdata login: create a user token at
+    urs.earthdata.nasa.gov ("Generate Token") and put it in
+    ``$EARTHDATA_TOKEN``."""
+    import urllib.request
+    dest = Path(dest)
+    dest.mkdir(parents=True, exist_ok=True)
+    tok = _earthdata_token()
+    for ext in ("shp", "shx", "dbf", "prj"):
+        out = dest / f"{MEASURES_FILE}.{ext}"
+        if out.exists() and out.stat().st_size > 0:
+            continue
+        req = urllib.request.Request(MEASURES_URL + out.name)
+        if tok:
+            req.add_header("Authorization", f"Bearer {tok}")
+        with urllib.request.urlopen(req, timeout=300) as r, open(out.with_suffix(".part"), "wb") as f:
+            f.write(r.read())
+        out.with_suffix(".part").rename(out)
+    return dest / f"{MEASURES_FILE}.shp"
+
+
+def _rasterize_floating(grid: xr.DataArray, shp: Path) -> np.ndarray:
+    """Floating ('FL') polygons burned onto the grid's cell centres."""
+    import geopandas as gpd
+    from rasterio import features
+    from rasterio.transform import from_origin
+    x, y = grid.x.values, grid.y.values
+    dx, dy = float(x[1] - x[0]), float(y[1] - y[0])
+    h = 0.5 * abs(dx)
+    bbox = (x.min() - h, y.min() - h, x.max() + h, y.max() + h)
+    polys = gpd.read_file(shp, bbox=bbox)
+    polys = polys[polys["TYPE"] == "FL"]
+    # rows run from the first y value; a north-up grid has dy < 0
+    transform = from_origin(x[0] - dx / 2, y[0] - dy / 2, dx, -dy)
+    shape = (y.size, x.size)
+    if polys.empty:
+        return np.zeros(shape, dtype=bool)
+    return features.rasterize(((g, 1) for g in polys.geometry), out_shape=shape,
+                              transform=transform, dtype="uint8").astype(bool)
+
+
+def floating_mask(grid: xr.DataArray, source: str = "measures_vector",
+                  mask_path=REPO / "data" / "Mask_Antarctica_v02.tif",
+                  floating_value: int = 125, download: bool = True) -> xr.DataArray:
+    """True where the ice is floating, on the cells of ``grid`` (EPSG:3031).
+
+    Both sources are MEaSUREs Antarctic Boundaries v2 (NSIDC-0709; Mouginot,
+    Scheuchl & Rignot 2017), whose grounding line comes mostly from InSAR
+    (Rignot et al. 2016, NSIDC-0498):
+
+    * ``"measures_vector"`` (default): the ice-boundary polygons, burned onto the
+      grid's cell centres.  The vertices are ~0.7 km apart; on Nivlisen 88% of
+      the resulting grounding-line cells lie within 100 m of an InSAR line.
+      Downloaded on first use (needs an Earthdata token, see
+      :func:`fetch_measures_boundaries`).  If that fails, falls back to:
+    * ``"measures_raster"``: the 500 m mask raster in ``data/`` (125 floating,
+      255 grounded), sampled by nearest neighbour - a 500 m staircase.
+    """
+    if source == "measures_vector":
+        shp = MEASURES_DIR / f"{MEASURES_FILE}.shp"
+        try:
+            if not shp.exists() and download:
+                shp = fetch_measures_boundaries()
+            f = _rasterize_floating(grid, shp)
+            da = xr.DataArray(f, coords={"y": grid.y, "x": grid.x}, dims=("y", "x"), name="floating")
+            da.attrs["source"] = "MEaSUREs Antarctic Boundaries v2 (NSIDC-0709), IceBoundaries polygons"
+            return da
+        except Exception as err:  # noqa: BLE001 - any failure falls back to the raster
+            import warnings
+            warnings.warn(f"MEaSUREs vector boundaries unavailable ({err!r}); "
+                          "using the 500 m raster mask instead", stacklevel=2)
+    elif source != "measures_raster":
+        raise ValueError(f"unknown source {source!r}")
     m = xr.open_dataarray(mask_path, engine="rasterio").squeeze(drop=True)
     f = (m.sel(x=grid.x, y=grid.y, method="nearest") == floating_value)
-    return f.assign_coords(x=grid.x, y=grid.y).rename("floating")
+    f = f.assign_coords(x=grid.x, y=grid.y).rename("floating")
+    f.attrs["source"] = f"{Path(mask_path).name} (500 m MEaSUREs Antarctic Boundaries v2 raster)"
+    return f
 
 
 def cell_area(grid: xr.DataArray) -> float:

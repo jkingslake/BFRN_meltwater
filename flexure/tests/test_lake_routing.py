@@ -173,3 +173,58 @@ def test_saved_lakes_are_flat_and_saving_maps_does_not_change_the_run():
     assert np.allclose(every.max_deflection, last.max_deflection, rtol=1e-9, atol=1e-12)
     assert np.allclose(every.water_depth[-1], last.water_depth[-1], atol=1e-9)
     assert np.isclose(float(every.water_lost[-1]), float(last.water_lost[-1]), rtol=1e-9, atol=1e-6)
+
+
+# --- floating mask from the MEaSUREs vector boundaries ----------------------
+def _square_shapefile(tmp_path, x0, x1, y0, y1, kind="FL"):
+    gpd = pytest.importorskip("geopandas")
+    from shapely.geometry import box
+    shp = tmp_path / "IceBoundaries_test.shp"
+    gpd.GeoDataFrame({"TYPE": [kind, "GR"]},
+                     geometry=[box(x0, y0, x1, y1), box(x1, y0, x1 + 500, y1)], crs=3031).to_file(shp)
+    return shp
+
+
+@pytest.mark.parametrize("north_up", [True, False])
+def test_rasterize_floating_cell_centres(tmp_path, north_up):
+    """Cells whose centres lie inside an FL polygon, and only those, are floating,
+    whichever way the y axis runs; GR polygons are ignored."""
+    shp = _square_shapefile(tmp_path, 1010.0, 1390.0, 2030.0, 2270.0)
+    x = np.arange(1000.0, 1500.0, 50.0) + 25.0
+    y = np.arange(2000.0, 2400.0, 50.0) + 25.0
+    if north_up:
+        y = y[::-1]
+    g = xr.DataArray(np.zeros((y.size, x.size)), coords={"y": y, "x": x}, dims=("y", "x"))
+    f = lr._rasterize_floating(g, shp)
+    X, Y = np.meshgrid(x, y)
+    expect = (X > 1010) & (X < 1390) & (Y > 2030) & (Y < 2270)
+    assert np.array_equal(f, expect)
+
+
+def test_floating_mask_falls_back_to_raster(monkeypatch, tmp_path):
+    """Without the vector files (and no download) the 500 m raster is used, with a warning."""
+    monkeypatch.setattr(lr, "MEASURES_DIR", tmp_path / "missing")
+    x = np.arange(400000.0, 401000.0, 100.0)
+    y = np.arange(2100000.0, 2099000.0, -100.0)
+    g = xr.DataArray(np.zeros((y.size, x.size)), coords={"y": y, "x": x}, dims=("y", "x"))
+    with pytest.warns(UserWarning, match="500 m raster"):
+        f = lr.floating_mask(g, download=False)
+    assert "500 m" in f.attrs["source"]
+    assert np.array_equal(f.values, lr.floating_mask(g, source="measures_raster").values)
+
+
+@pytest.mark.skipif(not (lr.MEASURES_DIR / f"{lr.MEASURES_FILE}.shp").exists(),
+                    reason="MEaSUREs vector boundaries not downloaded")
+def test_vector_mask_refines_raster_on_nivlisen():
+    """The vector and raster masks differ only near the grounding line (the 500 m staircase)."""
+    x = np.arange(386000.0, 488000.0, 128.0)
+    y = np.arange(2160000.0, 2042000.0, -128.0)
+    g = xr.DataArray(np.zeros((y.size, x.size)), coords={"y": y, "x": x}, dims=("y", "x"))
+    v = lr.floating_mask(g, download=False).values
+    r = lr.floating_mask(g, source="measures_raster").values
+    assert 0.4 < v.mean() < 0.6
+    diff = v != r
+    assert diff.mean() < 0.02
+    edge = r ^ ndi.binary_erosion(r)
+    near = ndi.distance_transform_edt(~edge) * 128.0 < 1000.0
+    assert diff[near].sum() > 0.9 * diff.sum()

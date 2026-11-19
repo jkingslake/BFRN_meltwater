@@ -1,0 +1,5 @@
+# Downloaded on demand (NASA Earthdata login); see flexure/lake_routing.fetch_measures_boundaries
+measures_boundaries_v2/
+measures_insar_gl_v2/
+icesat2_grounding_zone/
+add_coastline_v7_13/
